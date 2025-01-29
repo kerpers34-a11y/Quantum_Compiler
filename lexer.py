@@ -4,7 +4,7 @@ token_map = [
     ('COMMENT', r'\;[^\n]*'),  # 注释：以 ';' 开始直到换行
     ('XQI_BEGIN', r'XQI\-BEGIN'),
     ('XQI_END', r'XQI\-END'),
-    ('OPCODE', r'(?<!\w)(shot|error|ERR|U3|measure|CNOT|GPS|MOV|B|BL|BEQ|BNE|BGT|BGE|BLT|BLE|ADD|SUB|MUL|DIV|LDR|STR|CLDR|CSTR|qreg|creg|reset|debug|debug\-p|rand|barrier)(?=\W)'),
+    ('OPCODE', r'(?<!\w)(shot|error|ERR|U3|measure|CNOT|GPS|MOV|CMP|B|BX|BL|BEQ|BNE|BGT|BGE|BLT|BLE|ADD|SUB|MUL|DIV|LDR|STR|CLDR|CSTR|qreg|creg|reset|debug|debug\-p|rand|barrier)(?=\W)'),
     ('REGISTER', r'R\[\d+\]'),  # R[n]寄存器
     ('REGISTER_M', r'M\[\d+\]'),  # M[n]寄存器
     ('REGISTER_C', r'c\[\d+\]'),  # c[n]寄存器

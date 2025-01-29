@@ -90,13 +90,40 @@ print(f"\n>> [bold green]operation row number={operation_row_number}[/bold green
 
 # 测试代码
 code = """
-XQI-BEGIN
-ADD R[0], R[1], #5;
-measure R[2]->R[3];
-U3(0.233, R[3], 0.14567) q[1];
-BNE end;
-ADD R[4], R[5], #10;
-end:
+XQI-BEGIN             ; 标识程序开始
+
+; 定义数据
+MOV  R[0], #10       ; R[0] = 10
+MOV  R[1], #20       ; R[1] = 20
+ADD  R[2], R[0], R[1]  ; R[2] = R[0] + R[1]
+
+; 条件判断：如果 R[2] > 25，跳转到 greater_label
+CMP  R[2], #25;
+BGT  greater_label;
+
+; 顺序执行部分
+SUB  R[3], R[2], #5   ; R[3] = R[2] - 5
+MOV  M[0], R[3]       ; M[0] 存储 R[3] 的值
+
+; 过程调用：调用 multiply 子程序
+MOV  R[4], #3;
+MOV  R[5], #4;
+BL   multiply         ; 调用 multiply 函数 (R[6] = R[4] * R[5])
+
+; 量子寄存器操作
+CNOT q[0], q[1]      ; 量子 CNOT 操作
+measure q[1]-> c[0]   ; 测量 q[1] 并存入 c[0]
+
+; 跳转到结束
+B    end_label;
+
+greater_label:    MOV  R[7], #100  ; 如果 R[2] > 25, 赋值 100 到 R[7]
+
+end_label:    barrier         ; 量子同步屏障
+
+; 子程序 multiply: 计算 R[4] * R[5] 并存储在 R[6]
+multiply:  MUL  R[6], R[4], R[5];
+    BX   LR           ; 返回调用点
 XQI-END
 """
 
