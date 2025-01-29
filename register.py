@@ -25,10 +25,9 @@ def create_default_matrix1(value):
 
 @dataclass
 class MATRIX:
-      matrix_row: int = 0
-      matrix_colum: int = 0
       matrix_element: np.ndarray = field(default_factory=partial(create_default_matrix2,MAX_QUBITS_Corresponding_Code,MAX_QUBITS_Corresponding_Code))
-
+      # matrix_row: int = 0
+      # matrix_colum: int = 0
 @dataclass
 class Quantum_Register_Classical_Register:
     Quantum_Register: MATRIX
