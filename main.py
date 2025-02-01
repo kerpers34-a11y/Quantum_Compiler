@@ -90,7 +90,7 @@ print(f"\n>> [bold green]operation row number={operation_row_number}[/bold green
 
 # 测试代码
 code = """
-XQI-BEGIN             ; 标识程序开始
+XQI-BEGIN            ; 标识程序开始
 
 ; 定义数据
 MOV  R[0], #10       ; R[0] = 10
@@ -98,7 +98,7 @@ MOV  R[1], #20       ; R[1] = 20
 ADD  R[2], R[0], R[1]  ; R[2] = R[0] + R[1]
 
 ; 条件判断：如果 R[2] > 25，跳转到 greater_label
-CMP  R[2], #25;
+MOV  R[2], #25;
 BGT  greater_label;
 
 ; 顺序执行部分

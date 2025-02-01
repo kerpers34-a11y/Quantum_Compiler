@@ -4,7 +4,7 @@ token_map = [
     ('COMMENT', r'\;[^\n]*'),  # 注释：以 ';' 开始直到换行
     ('XQI_BEGIN', r'XQI\-BEGIN'),
     ('XQI_END', r'XQI\-END'),
-    ('OPCODE', r'(?<!\w)(shot|error|ERR|U3|measure|CNOT|GPS|MOV|B|BL|BEQ|BNE|BGT|BGE|BLT|BLE|ADD|SUB|MUL|DIV|LDR|STR|CLDR|CSTR|qreg|creg|reset|debug|debug\-p|rand|barrier)(?=\W)'),
+    ('OPCODE', r'(?<!\w)(shot|error|ERR|U3|measure|CNOT|CMP|GPS|MOV|B|BX|BL|BEQ|BNE|BGT|BGE|BLT|BLE|ADD|SUB|MUL|DIV|LDR|STR|CLDR|CSTR|qreg|creg|reset|debug|debug\-p|rand|barrier)(?=\W)'),
     ('REGISTER', r'R\[\d+\]'),  # R[n]寄存器
     ('REGISTER_M', r'M\[\d+\]'),  # M[n]寄存器
     ('REGISTER_C', r'c\[\d+\]'),  # c[n]寄存器
@@ -33,8 +33,8 @@ class Lexer:
         self.token_re = re.compile(token_regex)
         self.code = code
         self.tokens = []
+        self.token_map = token_map
         self.tokenize()
-
         # 检查是否存在 XQI-BEGIN 和 XQI-END
         if not any(token[0] == 'XQI_BEGIN' for token in self.tokens):
             raise ValueError("错误：缺少 'XQI-BEGIN'")
@@ -42,31 +42,38 @@ class Lexer:
             raise ValueError("错误：缺少 'XQI-END'")
 
     def tokenize(self):
+        line = 1
+        col = 1
         for match in self.token_re.finditer(self.code):
+            if match is None:
+                raise ValueError(f"正则匹配失败 (行 {line}, 列 {col})")
+
             kind = match.lastgroup
             value = match.group()
-
-            if kind in ('SKIP', 'COMMENT', 'NEWLINE'):
-                continue  # 忽略空白字符、注释
-
+            if kind in ('SKIP', 'NEWLINE'):
+                if kind == 'NEWLINE':
+                    line += 1
+                    col = 1
+                else:
+                    col += len(value)
+                continue  # 忽略空白字符
+            elif kind == 'COMMENT':
+                # 保留分号
+                self.tokens.append(('ASSIGN', ';', line, col))
+                col += 1  # 分号的长度
+                col += len(value) - 1  # 注释的其余部分
+                continue  # 忽略注释的其余部分
             elif kind == 'MISMATCH':
-                raise ValueError(f"非法字符: {value}")
-
-            self.tokens.append((kind, value))
-
+                raise ValueError(f"非法字符: {value} (行 {line}, 列 {col})")
+            self.tokens.append((kind, value, line, col))
+            col += len(value)
         # 确保 `;` 始终作为单独的 Token
         if self.tokens and self.tokens[-1][0] != 'ASSIGN':
-            self.tokens.append(('ASSIGN', ';'))
-
-        # 处理 XQI-BEGIN，自动添加 ;
-        if self.tokens and self.tokens[0][0] == 'XQI_BEGIN':
-            self.tokens.insert(1, ('ASSIGN', ';'))
-
-        # 处理 XQI-END，自动添加 ;
-        if self.tokens and self.tokens[0][0] == 'XQI_END':
-            self.tokens.insert(1, ('ASSIGN', ';'))
-
-        self.tokens.append(('EOF', 'EOF'))
+            self.tokens.append(('ASSIGN', ';', line, col))
 
     def next_token(self):
-        return self.tokens.pop(0) if self.tokens else ('EOF', 'EOF')
+        if self.tokens:
+            token = self.tokens.pop(0)
+            return token
+        else:
+            return 'EOF', 'EOF', 0, 0
