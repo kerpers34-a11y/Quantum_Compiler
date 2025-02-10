@@ -13,7 +13,7 @@ token_map = [
     ('REGISTER_PC', r'PC'),  # PC寄存器
     ('ARROW', r'\->'),
     ('COMPLEX', r'([-+]?\s*\d+(\.\d*)?\s*[-+])?\s*([-+]?\s*\d+(\.\d*)?\s*[ij])\s*([-+]\s*\d+(\.\d*)?)?'),
-    ('NUMBER', r'\d+(\.\d*)?'),
+    ('NUMBER', r'\b\d+(\.\d*)?\b'),
     ('IMMEDIATE', r'#\d+'),
     ('LABEL_DEF', r'[a-zA-Z_][a-zA-Z0-9_]*\:'),  # 过程定义 (label:)
     ('LABEL', r'[a-zA-Z_][a-zA-Z0-9_]*'),  # 标签引用

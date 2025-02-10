@@ -1,4 +1,5 @@
 import re
+import config
 class ASTNode:
     """ 抽象语法树的通用节点 """
     def __init__(self, type_, value=None, children=None, line=None, col=None):
@@ -48,9 +49,24 @@ class Parser:
         # 确保 XQI-BEGIN 只出现在第一行
         if self.current_token[0] == 'XQI_BEGIN':
             program_node.children.append(self.xqi_begin())
-            self.eat('ASSIGN')  # 消耗 `;`，但不添加到 AST
         else:
             raise SyntaxError(f"程序必须以 XQI-BEGIN 开始 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+
+        # 检查 shot 是否在 XQI-BEGIN 的下一行
+        if self.current_token[0] == 'OPCODE' and self.current_token[1] == 'shot':
+            if self.current_token[2] != program_node.children[0].line + 1:
+                raise SyntaxError(f"shot 必须在 XQI-BEGIN 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            program_node.children.append(self.instruction())
+        else:
+            raise SyntaxError(f"shot 必须在 XQI-BEGIN 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+
+        # 检查 error 是否在 shot 的下一行
+        if self.current_token[0] == 'OPCODE' and self.current_token[1] == 'error':
+            if self.current_token[2] != program_node.children[1].line + 1:
+                raise SyntaxError(f"error 必须在 shot 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            program_node.children.append(self.instruction())
+        else:
+            raise SyntaxError(f"error 必须在 shot 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
         while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
             program_node.children.append(self.statement())
@@ -147,6 +163,22 @@ class Parser:
                     f"语法错误: measure 指令缺乏 -> (行 {self.current_token[2]}, 列 {self.current_token[3]})")
             node.children.append(opcode_node)
             node.children.append(operands_node)
+        elif opcode_node.value == "shot":
+            # 解析 shot 操作数
+            operands_node = self.operand_list()
+            if len(operands_node.children) != 1 or not operands_node.children[0].value.isdigit() or int(operands_node.children[0].value) <= 0:
+                raise SyntaxError(
+                    f"语法错误: shot 后面必须且仅能接一个正整数 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            node.children.append(opcode_node)
+            node.children.append(operands_node)
+        elif opcode_node.value == "error":
+            # 解析 error 操作数
+            operands_node = self.operand_list()
+            if not self.validate_error_operands(operands_node.children):
+                 raise SyntaxError(
+                    f"语法错误: error 操作数格式不正确 ({operands_node.children}行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            node.children.append(opcode_node)
+            node.children.append(operands_node)
         else:
             # 其他指令的标准解析方式
             operands_node = self.operand_list()
@@ -156,6 +188,66 @@ class Parser:
         assign_node = self.eat('ASSIGN')
         node.children.append(ASTNode("ASSIGN", assign_node[1], line=assign_node[2], col=assign_node[3]))
         return node
+
+    @staticmethod
+    def validate_error_operands(operands):
+        """ 验证 error 操作数的格式 """
+
+        def is_valid_num1(value):
+            return value in ('0', '1')
+
+        def is_valid_num2(value):
+            return value.isdigit() and 0 <= int(value) <= 9
+
+        def is_valid_num3(value):
+            try:
+                num = float(value)
+                return 0.0 <= num <= 1.0
+            except ValueError:
+                return False
+
+        def get_value(operand):
+            if isinstance(operand, ASTNode):
+                if operand.type == "Operand":
+                    return operand.value
+                elif operand.type == "Parameters":
+                    if len(operand.children) == 1:
+                        return get_value(operand.children[0])
+                    else:
+                        return [get_value(child) for child in operand.children]
+            return None
+
+        # 检查操作数数量
+        if len(operands) < 1 or len(operands) > 4:
+            return False
+
+        # 提取操作数的值
+        values = [get_value(operand) for operand in operands]
+
+        # 检查 num1
+        num1 = values[0]
+        if not is_valid_num1(num1):
+            return False
+
+        # 检查 num2 (如果存在)
+        if len(values) > 1:
+            num2 = values[1]
+            if not is_valid_num2(num2):
+                return False
+
+        # 检查 num3 (如果存在)
+        if len(values) > 2:
+            num3 = values[2]
+            if not is_valid_num3(num3):
+                return False
+
+        # 检查 num4 (如果存在)
+        if len(values) > 3:
+            num4 = values[3]
+            if not is_valid_num3(num4):
+                return False
+
+        return True
 
     def opcode(self):
         """ 解析操作码 """
@@ -183,7 +275,7 @@ class Parser:
         # 处理普通操作数（寄存器、立即数、标签等）
         operands = []
         while self.current_token[0] in ('REGISTER', 'REGISTER_M', 'REGISTER_C', 'REGISTER_Q',
-                                        'REGISTER_LR', 'REGISTER_PC', 'IMMEDIATE', 'LABEL'):
+                                        'REGISTER_LR', 'REGISTER_PC', 'IMMEDIATE', 'NUMBER', 'COMPLEX','LABEL'):
             operands.append(self.operand())
             if self.current_token[0] == 'COMMA':  # 处理 , 逗号分隔的操作数
                 self.eat('COMMA')
@@ -199,19 +291,39 @@ class Parser:
         """ 解析单个操作数 """
         token = self.current_token
         if token[0] == 'REGISTER':
-            node = ASTNode("Operand", f"R[{token[1][2:-1]}]", line=token[2], col=token[3])  # 提取 R[n] 格式
+            # 提取 R[n] 格式，并检查 n 是否在有效范围内
+            register_number = int(token[1][2:-1])  # 提取并转换为整数
+            if register_number < 0 or register_number >= config.MAX_Register:
+                raise SyntaxError(f"语法错误: R[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+            node = ASTNode("Operand", f"R[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_M':
-            node = ASTNode("Operand", f"M[{token[1][2:-1]}]", line=token[2], col=token[3])  # 提取 M[n] 格式
+            # 提取 M[n] 格式，并检查 n 是否在有效范围内
+            register_number = int(token[1][2:-1])
+            if register_number < 0 or register_number >= config.MAX_Memory:
+                raise SyntaxError(f"语法错误: M[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+            node = ASTNode("Operand", f"M[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_C':
-            node = ASTNode("Operand", f"c[{token[1][2:-1]}]", line=token[2], col=token[3])  # 提取 c[n] 格式
+            # 提取 c[n] 格式，并检查 n 是否在有效范围内
+            register_number = int(token[1][2:-1])
+            if register_number < 0 or register_number >= config.MAX_Classical_Register:
+                raise SyntaxError(f"语法错误: c[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+            node = ASTNode("Operand", f"c[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_Q':
-            node = ASTNode("Operand", f"q[{token[1][2:-1]}]", line=token[2], col=token[3])  # 提取 q[n] 格式
+            # 提取 q[n] 格式，并检查 n 是否在有效范围内
+            register_number = int(token[1][2:-1])
+            if register_number < 0 or register_number >= config.MAX_QUBITS:
+                raise SyntaxError(f"语法错误: q[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+            node = ASTNode("Operand", f"q[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_LR':
             node = ASTNode("Operand", "LR", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_PC':
             node = ASTNode("Operand", "PC", line=token[2], col=token[3])
+        elif token[0] == 'COMPLEX':
+            node = ASTNode("Operand", token[1], line=token[2], col=token[3])  # 复数
         elif token[0] == 'IMMEDIATE':
             node = ASTNode("Operand", token[1], line=token[2], col=token[3])  # 立即数
+        elif token[0] == 'NUMBER':
+            node = ASTNode("Operand", token[1], line=token[2], col=token[3])  # 数字
         elif token[0] == 'LABEL':
             node = ASTNode("Label", token[1], line=token[2], col=token[3])  # 标签
         else:
