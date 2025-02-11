@@ -126,31 +126,28 @@ class ASTEvaluator:
         """ 处理 qreg 操作符，初始化量子寄存器 """
         operand = node.value  # 提取操作数，格式如 "q[num]"
 
-        # 语法检查
-        match = re.fullmatch(r"q$ (\d+) $", operand)
-        if not match:
-            raise ValueError(f"语法错误: {operand} 不是有效的 qreg 语法，应为 q[num]")
-
-        num_qubits = int(match.group(1))
-        if num_qubits < 1 or num_qubits > MAX_QUBITS:
-            raise ValueError(f"错误: 量子寄存器的位数 {num_qubits} 超出范围 (1-{MAX_QUBITS})")
-
+        num_qubits = int(operand[2:-1])
         # 生成单量子位基态 |0> = [1, 0]
         qubit_0 = np.array([1, 0], dtype=complex)
 
         # 计算 num_qubits 个 |0> 量子态的克罗内克积
-        initial_state = qubit_0
+        qubit_initial_state = qubit_0
         for _ in range(num_qubits - 1):
-            initial_state = np.kron(initial_state, qubit_0)
+            qubit_initial_state = np.kron(qubit_initial_state, qubit_0)
 
-        # 计算密度矩阵: ρ = |ψ⟩⟨ψ|
-        measure_initial_state = np.outer(initial_state, initial_state.conj())
+        initial_state = MATRIX()
+        initial_state.matrix_element = qubit_initial_state
 
-        return initial_state, measure_initial_state
+        return initial_state
 
     def evaluate_creg(self, node):
         """ 处理 creg 操作符 """
-        pass
+        operand = node.value  # 提取操作数，格式如 "q[num]"
+
+        num_creg = int(operand[2:-1])
+        measure_initial_state = MATRIX()
+        measure_initial_state.matrix_element = np.zeros([1, num_creg], dtype=complex)
+        return measure_initial_state
 
     def evaluate_reset(self, node):
         """ 处理 reset 操作符 """
