@@ -6,10 +6,10 @@ import sqlite3
 # 显示输入框Waiting函数
 def get_user_input(prompt="Waiting..."):
     # 设置灰色的文字颜色
-    GREY = "\033[90m"
-    RESET = "\033[0m"
+    grey = "\033[90m"
+    reset = "\033[0m"
     # 打印灰色提示文字
-    sys.stdout.write(GREY + prompt + RESET)
+    sys.stdout.write(grey + prompt + reset)
     sys.stdout.flush()
 
     input_chars = []
