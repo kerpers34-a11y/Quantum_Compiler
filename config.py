@@ -56,6 +56,8 @@ default_reset_error_Probability: Final=0.001
 
 default_measure_error_Probability: Final=0.001
 
+default_amp_damping_gamma: Final=0.001   ####################################################???
+default_phase_damping_gamma: Final=0.001  ####################################################???
 
 
 
