@@ -22,30 +22,28 @@ def collect_labels(ast):
 
 
 class QuantumEnvironment:
-    def __init__(self, qreg_size, creg_size, max_registers=config.MAX_Register,
+    def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_Register,
                  max_memory=config.MAX_Memory, simulation_mode='statevector'):
         # 参数校验
-        if not all(isinstance(x, int) and x > 0 for x in [qreg_size, creg_size]):
-            raise ValueError("Register sizes must be positive integers")
-
-        self.simulation_mode = simulation_mode.lower()
-        self.qreg_size = qreg_size
+        if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
+            raise ValueError("Register sizes must be non-negative integers")
+        self.qreg_size = qreg_size  # 直接保存为实例变量
         self.creg_size = creg_size
+        self.simulation_mode = simulation_mode.lower()
         self.max_registers = max_registers
         self.max_memory = max_memory
 
+        # 初始化量子寄存器大小和经典寄存器大小
+        self._initial_qreg_size = qreg_size
+        self._initial_creg_size = creg_size
+
         # 初始化量子态
-        if self.simulation_mode == 'statevector':
-            self.quantum_state = np.zeros(2 ** qreg_size, dtype=np.complex128)
-            self.quantum_state[0] = 1.0  # |0...0>
-        elif self.simulation_mode == 'density_matrix':
-            self.quantum_state = np.zeros((2 ** qreg_size, 2 ** qreg_size), dtype=np.complex128)
-            self.quantum_state[0, 0] = 1.0  # |0...0><0...0|
-        else:
-            raise ValueError(f"Unsupported simulation mode: {simulation_mode}")
+        self.quantum_state = []
+        self._reset_quantum_register(qreg_size)  # 调用内部重置方法
 
         # 初始化经典寄存器（兼容复数测量结果）
-        self.creg = np.zeros(creg_size, dtype=np.complex128)
+        self._initial_creg = np.zeros(creg_size, dtype=np.complex128)
+        self.creg = self._initial_creg.copy()
 
         # 初始化通用寄存器和存储
         self.registers = np.zeros(max_registers, dtype=np.float64)
@@ -55,12 +53,50 @@ class QuantumEnvironment:
         self.pc = 0  # 程序计数器
         self.lr = 0  # 链接寄存器
 
+        self.SF = 0  # 符号标志（负数）
+        self.ZF = 0  # 零标志
+
         # 错误模型
         self.error_model = None
 
-        # 保存初始状态用于reset
-        self._initial_quantum_state = self.quantum_state.copy()
-        self._initial_creg = self.creg.copy()
+    def _reset_quantum_register(self, new_size):
+        """重置量子寄存器"""
+        self.qreg_size = new_size
+        self._initial_quantum_state = self._initialize_quantum_state(new_size)
+        self.quantum_state = self._initial_quantum_state.copy()
+
+    def resize_qreg(self, new_size):
+        """修改量子寄存器大小"""
+        if not isinstance(new_size, int) or new_size < 0:
+            raise ValueError("qreg_size must be non-negative integer")
+        self._reset_quantum_register(new_size)
+
+    def _initialize_quantum_state(self, size):
+        """根据模拟模式初始化量子态"""
+        if size == 0:
+            return np.array([], dtype=np.complex128) if self.simulation_mode == 'statevector' else np.array([], dtype=np.complex128).reshape(0,0)
+        if self.simulation_mode == 'statevector':
+            state = np.zeros(2 ** size, dtype=np.complex128)
+            state[0] = 1.0
+        elif self.simulation_mode == 'density_matrix':
+            state = np.zeros((2 ** size, 2 ** size), dtype=np.complex128)
+            state[0, 0] = 1.0
+        else:
+            raise ValueError(f"Unsupported simulation mode: {self.simulation_mode}")
+        return state
+
+    def reset_for_shot(self):
+        """重置量子环境到初始状态（仅量子相关部分）"""
+        self.quantum_state = self._initial_quantum_state.copy()
+        self.creg = self._initial_creg.copy()
+        self.pc = 0
+        self.lr = 0
+
+    def full_reset(self):
+        """完全重置所有状态（用于环境初始化）"""
+        self.reset_for_shot()
+        self.registers.fill(0.0)
+        self.memory.fill(0.0)
 
     def _build_multi_qubit_ops(self, ops, target_qubits):
         """构建作用于指定量子位的多量子位算子"""
@@ -180,9 +216,9 @@ class QuantumEnvironment:
         elif noise_type == 8:
             p = params[0] if params else config.default_reset_error_Probability
             for q in qubits:
-                K0 = np.sqrt(1 - p) * np.eye(2)
-                K1 = np.sqrt(p) * np.array([[1, 1], [0, 0]])  # 重置到|0>
-                operators += self._build_multi_qubit_ops([K0, K1], [q])
+                k0 = np.sqrt(1 - p) * np.eye(2)
+                k1 = np.sqrt(p) * np.array([[1, 1], [0, 0]])  # 重置到|0>
+                operators += self._build_multi_qubit_ops([k0, k1], [q])
 
         else:
             raise ValueError(f"Unsupported noise type: {noise_type}")
@@ -193,13 +229,53 @@ class Evaluator:
     def __init__(self, env):
         self.env = env
         self.labels = {}
+        self.body_instructions = []
 
     def evaluate(self, ast):
-        self.env.reset()
+        self.env.full_reset()
         self.labels = collect_labels(ast)
+
+        # 分割AST为配置部分和主体部分
+        shot_node = None
+        config_nodes = []
+        found_shot = False
+
+        # 第一次遍历：定位shot节点和配置指令
         for node in ast.children:
-            if isinstance(node, ASTNode):
-                self.execute_instruction(node)
+            if isinstance(node, ASTNode) and node.type == 'Opcode' and node.value[0] == 'shot':
+                shot_node = node
+                found_shot = True
+                continue
+
+            if found_shot:
+                if node.type == 'Opcode' and node.value[0] in ['error', 'qreg', 'creg']:
+                    config_nodes.append(node)
+                else:
+                    self.body_instructions.append(node)
+
+        if not shot_node:
+            raise ValueError("Missing shot instruction")
+
+        # 处理配置前的节点（如XQI-BEGIN）
+        for node in ast.children:
+            if node is shot_node: break
+            self.execute_instruction(node)
+
+        # 处理配置指令
+        for node in config_nodes:
+            self.execute_instruction(node)
+
+        # 执行shot循环
+        shots = int(shot_node.children[0].value[0])
+        results = []
+        for _ in range(shots):
+            self.env.reset_for_shot()
+            for node in self.body_instructions:
+                if isinstance(node, ASTNode):
+                    self.execute_instruction(node)
+            results.append(self.env.creg.copy())
+
+        print(f"Results after {shots} shots: {results}")
 
     def execute_instruction(self, node):
         if node.type == 'Opcode':
@@ -226,8 +302,24 @@ class Evaluator:
                 self.execute_bl(node)
             elif opcode == 'BNE':
                 self.execute_bne(node)
+            elif opcode == 'BEQ':
+                self.execute_beq(node)
+            elif opcode == 'BGT':
+                self.execute_bgt(node)
+            elif opcode == 'BGE':
+                self.execute_bge(node)
+            elif opcode == 'BLT':
+                self.execute_blt(node)
+            elif opcode == 'BLE':
+                self.execute_ble(node)
             elif opcode == 'SUB':
                 self.execute_sub(node)
+            elif opcode == 'ADD':
+                self.execute_add(node)
+            elif opcode == 'MUL':
+                self.execute_mul(node)
+            elif opcode == 'DIV':
+                self.execute_div(node)
             elif opcode == 'LDR':
                 self.execute_ldr(node)
             elif opcode == 'STR':
@@ -283,12 +375,15 @@ class Evaluator:
 
     def execute_qreg(self, node):
         qreg_size = int(node.children[0].value[0][1:-1])
-        self.env.quantum_state = np.zeros(2 ** qreg_size, dtype=np.complex128)
-        self.env.quantum_state[0] = 1.0
+        self.env.qreg_size = qreg_size  # 更新实例变量
+        #self.env._initial_quantum_state = self.env._initialize_quantum_state(qreg_size)
+        #self.env.quantum_state = self.env._initial_quantum_state.copy()
+        self.env.resize_qreg(qreg_size)
 
     def execute_creg(self, node):
         creg_size = int(node.children[0].value[0][1:-1])
-        self.env.quantum_state = [np.complex128(0) for _ in range(creg_size)]
+        self.env._initial_creg = np.zeros(creg_size, dtype=np.complex128)
+        self.env.creg = self.env._initial_creg.copy()
 
     def execute_mov(self, node):
         dest = node.children[0].value[0]
@@ -405,6 +500,42 @@ class Evaluator:
 
         self.env.creg[creg_idx] = result  # 存储经典结果
 
+    def execute_add(self, node):
+        dest = int(node.children[0].value[0][2:-1])
+        src1 = int(node.children[1].value[0][2:-1])
+        src2 = int(node.children[2].value[0][2:-1])
+        result = self.env.registers[src1] + self.env.registers[src2]
+        self.env.registers[dest] = result
+        self.env.SF = 1 if result < 0 else 0
+        self.env.ZF = 1 if result == 0 else 0
+
+    def execute_sub(self, node):
+        dest = int(node.children[0].value[0][2:-1])
+        src1 = int(node.children[1].value[0][2:-1])
+        src2 = int(node.children[2].value[0][2:-1])
+        result = self.env.registers[src1] - self.env.registers[src2]
+        self.env.registers[dest] = result
+        self.env.SF = 1 if result < 0 else 0
+        self.env.ZF = 1 if result == 0 else 0
+
+    def execute_mul(self, node):
+        dest = int(node.children[0].value[0][2:-1])
+        src1 = int(node.children[1].value[0][2:-1])
+        src2 = int(node.children[2].value[0][2:-1])
+        result = self.env.registers[src1] * self.env.registers[src2]
+        self.env.registers[dest] = result
+        self.env.SF = 1 if result < 0 else 0
+        self.env.ZF = 1 if result == 0 else 0
+
+    def execute_div(self, node):
+        dest = int(node.children[0].value[0][2:-1])
+        src1 = int(node.children[1].value[0][2:-1])
+        src2 = int(node.children[2].value[0][2:-1])
+        result = self.env.registers[src1] // self.env.registers[src2]  # 根据需求处理除法
+        self.env.registers[dest] = result
+        self.env.SF = 1 if result < 0 else 0
+        self.env.ZF = 1 if result == 0 else 0
+
     def execute_b(self, node):
         label = node.children[0].value[0]
         self.env.pc = self.labels[label]
@@ -414,16 +545,35 @@ class Evaluator:
         self.env.lr = self.env.pc + 1
         self.env.pc = self.labels[label]
 
-    def execute_bne(self, node):
+    def execute_beq(self, node):
         label = node.children[0].value[0]
-        if self.env.registers[15] != self.env.registers[14]:
+        if self.env.ZF == 1:
             self.env.pc = self.labels[label]
 
-    def execute_sub(self, node):
-        dest = int(node.children[0].value[0][2:-1])
-        src1 = int(node.children[1].value[0][2:-1])
-        src2 = int(node.children[2].value[0][2:-1])
-        self.env.registers[dest] = self.env.registers[src1] - self.env.registers[src2]
+    def execute_bne(self, node):
+        label = node.children[0].value[0]
+        if self.env.ZF == 0:
+            self.env.pc = self.labels[label]
+
+    def execute_bgt(self, node):
+        label = node.children[0].value[0]
+        if self.env.SF == 0 and self.env.ZF == 0:
+            self.env.pc = self.labels[label]
+
+    def execute_bge(self, node):
+        label = node.children[0].value[0]
+        if self.env.SF == 0 or self.env.ZF == 1:
+            self.env.pc = self.labels[label]
+
+    def execute_blt(self, node):
+        label = node.children[0].value[0]
+        if self.env.SF == 1 and self.env.ZF == 0:
+            self.env.pc = self.labels[label]
+
+    def execute_ble(self, node):
+        label = node.children[0].value[0]
+        if self.env.SF == 1 or self.env.ZF == 1:
+            self.env.pc = self.labels[label]
 
     def execute_ldr(self, node):
         dest = int(node.children[0].value[0][2:-1])
