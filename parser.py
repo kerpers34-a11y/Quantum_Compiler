@@ -33,6 +33,9 @@ class Parser:
         self.current_token = self.lexer.next_token()
         self.token_map = lexer.token_map  # 保存 token_map
 
+        self.last_valid_opcode = None
+        self.last_opcode_line = -1
+
     def eat(self, token_type):
         """ 消耗当前 token，并获取下一个 token """
         if self.current_token[0] == token_type:
@@ -69,7 +72,20 @@ class Parser:
             raise SyntaxError(f"error 必须在 shot 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
         while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
-            program_node.children.append(self.statement())
+            stmt = self.statement()
+            if stmt:
+                # 更新最后有效指令状态
+                if stmt.type == "Instruction":
+                    op = stmt.children[0].value
+                    if op in ('U3', 'CNOT'):
+                        self.last_valid_opcode = op
+                        self.last_opcode_line = stmt.line
+                    else:
+                        if stmt.type == "Instruction":
+                            op = stmt.children[0].value
+                            if op not in ('U3', 'CNOT') and stmt.line > self.last_opcode_line:
+                                self.last_valid_opcode = None
+                program_node.children.append(stmt)
 
         # 确保 XQI-END 只出现在最后一行
         if self.current_token[0] == 'XQI_END':
@@ -154,9 +170,20 @@ class Parser:
         """ 解析指令，确保 measure 作为独立的 Instruction """
         node = ASTNode("Instruction", line=self.current_token[2], col=self.current_token[3])
         opcode_node = self.opcode()
+
+        if opcode_node.value == "ERR":
+            return self.handle_err_instruction(self, node, opcode_node)
+        if opcode_node.value == "GPS":
+            operands_node = self.operand_list()
+            self.validate_gps_operands(operands_node.children)
+            node.children.extend([opcode_node, operands_node])
+            self.eat('ASSIGN')
+            return node
+
         if opcode_node.value == "measure":
             # 解析操作数
             operands_node = self.operand_list()
+            self.validate_measure_operands(operands_node.children)
             # 检查 measure 是否包含 ->
             if not any(child.value == '->' for child in operands_node.children):
                 raise SyntaxError(
@@ -179,6 +206,26 @@ class Parser:
                     f"语法错误: error 操作数格式不正确 ({operands_node.children}行 {self.current_token[2]}, 列 {self.current_token[3]})")
             node.children.append(opcode_node)
             node.children.append(operands_node)
+        elif opcode_node.value == "U3":
+            operands_node = self.operand_list()
+            self.validate_u3_operands(operands_node.children)
+            node.children.extend([opcode_node, operands_node])
+        elif opcode_node.value == "CNOT":
+            operands_node = self.operand_list()
+            self.validate_cnot_operands(operands_node.children)
+            node.children.extend([opcode_node, operands_node])
+        elif opcode_node.value in ["CLDR", "CSTR"]:
+            operands_node = self.operand_list()
+            self.validate_cldr_cstr_operands(opcode_node.value, operands_node.children)
+            node.children.extend([opcode_node, operands_node])
+        elif opcode_node.value in ["ADD", "SUB", "MUL", "DIV"]:  # 经典指令
+            operands_node = self.operand_list()
+            self.validate_classical_arithmetic_operands(operands_node.children)
+            node.children.extend([opcode_node, operands_node])
+        elif opcode_node.value == "MOV":
+            operands_node = self.operand_list()
+            self.validate_mov_operands(operands_node.children)
+            node.children.extend([opcode_node, operands_node])
         else:
             # 其他指令的标准解析方式
             operands_node = self.operand_list()
@@ -190,8 +237,60 @@ class Parser:
         return node
 
     @staticmethod
+    def handle_err_instruction(self, node, opcode_node):
+        """ 处理ERR指令 """
+        # 验证前序指令类型
+        if self.last_valid_opcode not in ('U3', 'CNOT'):
+            raise SyntaxError(f"ERR指令必须出现在U3或CNOT之后 (行 {opcode_node.line})")
+
+        # 验证行号必须严格大于目标指令
+        if opcode_node.line <= self.last_opcode_line:
+            raise SyntaxError(
+                f"ERR指令必须出现在目标指令之后 (当前行 {opcode_node.line}, 前序行 {self.last_opcode_line})")
+
+        # 解析操作数
+        operands_node = self.operand_list()
+
+        # 参数结构验证
+        params_node = next((c for c in operands_node.children if c.type == "Parameters"), None)
+        if not params_node or len(params_node.children) != 5:
+            raise SyntaxError(f"ERR指令需要5个参数 (行 {opcode_node.line})")
+
+        # 参数值验证
+        err_model = params_node.children[0].value
+        err_prob = params_node.children[1].value
+        if err_model not in {'1', '2', '3'}:
+            raise SyntaxError(f"无效的错误模型类型 {err_model} (行 {opcode_node.line})")
+        try:
+            if not (0 <= float(err_prob) <= 1):
+                raise ValueError
+        except ValueError:
+            raise SyntaxError(f"错误概率必须在0-1之间 (行 {opcode_node.line})")
+
+        # 量子寄存器验证
+        if not any(c.value.startswith('q[') for c in operands_node.children if c.type == "Operand"):
+            raise SyntaxError(f"缺少量子寄存器参数 (行 {opcode_node.line})")
+
+        # 构建节点
+        node.children.extend([opcode_node, operands_node])
+        self.eat('ASSIGN')  # 消耗分号
+
+        # 更新最后有效指令状态
+        self.last_valid_opcode = 'ERR'
+        self.last_opcode_line = opcode_node.line
+
+        return node
+
+    @staticmethod
     def validate_error_operands(operands):
         """ 验证 error 操作数的格式 """
+        # 展开 Parameters 节点
+        expanded_operands = []
+        for op in operands:
+            if isinstance(op, ASTNode) and op.type == "Parameters":
+                expanded_operands.extend(op.children)
+            else:
+                expanded_operands.append(op)
 
         def is_valid_num1(value):
             return value in ('0', '1')
@@ -206,43 +305,37 @@ class Parser:
             except ValueError:
                 return False
 
-        def get_value(operand):
-            if isinstance(operand, ASTNode):
-                if operand.type == "Operand":
-                    return operand.value
-                elif operand.type == "Parameters":
-                    if len(operand.children) == 1:
-                        return get_value(operand.children[0])
-                    else:
-                        return [get_value(child) for child in operand.children]
-            return None
-
-        # 检查操作数数量
-        if len(operands) < 1 or len(operands) > 4:
+        # 检查展开后的操作数数量
+        if len(expanded_operands) < 1 or len(expanded_operands) > 4:
             return False
 
         # 提取操作数的值
-        values = [get_value(operand) for operand in operands]
+        values = []
+        for operand in expanded_operands:
+            if isinstance(operand, ASTNode) and operand.type == "Operand":
+                values.append(operand.value)
+            else:
+                return False  # 无效的节点类型
 
-        # 检查 num1
+        # 验证 num1
         num1 = values[0]
         if not is_valid_num1(num1):
             return False
 
-        # 检查 num2 (如果存在)
-        if len(values) > 1:
+        # 验证 num2（如果存在）
+        if len(values) >= 2:
             num2 = values[1]
             if not is_valid_num2(num2):
                 return False
 
-        # 检查 num3 (如果存在)
-        if len(values) > 2:
+        # 验证 num3（如果存在）
+        if len(values) >= 3:
             num3 = values[2]
             if not is_valid_num3(num3):
                 return False
 
-        # 检查 num4 (如果存在)
-        if len(values) > 3:
+        # 验证 num4（如果存在）
+        if len(values) >= 4:
             num4 = values[3]
             if not is_valid_num3(num4):
                 return False
@@ -349,8 +442,100 @@ class Parser:
         self.eat('ASSIGN')
         return ASTNode("ConditionalBranch", None, [opcode, label], line=self.current_token[2], col=self.current_token[3])
 
+    @staticmethod
+    def validate_mov_operands(operands):
+        for op in operands:
+            if isinstance(op, ASTNode) and op.type == "Operand":
+                if op.value.startswith(('q[', 'c[', 'M[')):
+                    raise SyntaxError(f"MOV指令禁止使用 {op.value} 寄存器 (行 {op.line})")
+
+    @staticmethod
+    def validate_measure_operands(operands):
+        arrow_index = None
+        for i, op in enumerate(operands):
+            if isinstance(op, ASTNode) and op.value == '->':
+                arrow_index = i
+                break
+        if arrow_index is None or arrow_index != 1:
+            raise SyntaxError("measure指令必须包含 -> 分隔符")
+        q_register = operands[0]
+        c_register = operands[2]
+        if not q_register.value.startswith('q['):
+            raise SyntaxError(f"measure源操作数必须是量子寄存器 (行 {q_register.line})")
+        if not c_register.value.startswith('c['):
+            raise SyntaxError(f"measure目标操作数必须是经典寄存器 (行 {c_register.line})")
+
+    def validate_u3_operands(self, operands):
+        # 提取参数节点
+        params_node = next((c for c in operands if isinstance(c, ASTNode) and c.type == "Parameters"), None)
+
+        # 验证参数数量
+        if not params_node or len(params_node.children) != 3:
+            raise SyntaxError(f"U3指令需要3个参数 (行 {self.current_token[2]})")
+
+        # 验证参数类型（可以是数字、立即数或寄存器）
+        for param in params_node.children:
+            if param.type not in ("Operand", "IMMEDIATE", "NUMBER"):
+                raise SyntaxError(f"U3参数 {param.value} 类型无效 (行 {param.line})")
+
+        # 验证量子寄存器操作数
+        q_operands = [
+            op for op in operands
+            if isinstance(op, ASTNode) and op.type == "Operand" and op.value.startswith('q[')
+        ]
+        if len(q_operands) != 1:
+            raise SyntaxError(f"U3需要且只能指定一个量子寄存器 (行 {self.current_token[2]})")
+
+        # 确保没有多余操作数
+        if len(operands) != 2:  # 1个Parameters节点 + 1个Operand节点
+            raise SyntaxError(f"U3语法格式错误，应为 U3(theta,phi,lambda) q[n]; (行 {self.current_token[2]})")
+
+    @staticmethod
+    def validate_cnot_operands(operands):
+        if len(operands) < 2:
+            raise SyntaxError("CNOT需要两个量子寄存器")
+        for op in operands[:2]:
+            if not op.value.startswith('q['):
+                raise SyntaxError(f"CNOT操作数 {op.value} 不是量子寄存器 (行 {op.line})")
+
+    def validate_gps_operands(self, operands):
+        """ 验证GPS指令格式：GPS(delta) q[m]; """
+        # 提取参数节点和操作数
+        params_node = next((c for c in operands if c.type == "Parameters"), None)
+        operands_list = [op for op in operands if op.type == "Operand"]
+
+        # 验证参数部分
+        if not params_node or len(params_node.children) != 1:
+            raise SyntaxError(f"GPS指令必须包含一个参数delta (行 {self.current_token[2]})")
+        delta_param = params_node.children[0]
+        if delta_param.value.startswith('q['):
+            raise SyntaxError(f"GPS参数delta不能是量子寄存器 (行 {delta_param.line})")
+
+        # 验证操作数部分
+        if len(operands_list) != 1 or not operands_list[0].value.startswith('q['):
+            raise SyntaxError(f"GPS第二个操作数必须是量子寄存器 (行 {self.current_token[2]})")
+
+    @staticmethod
+    def validate_classical_arithmetic_operands(operands):
+        for op in operands:
+            if isinstance(op, ASTNode) and op.type == "Operand" and op.value.startswith('q['):
+                raise SyntaxError(f"经典算术指令禁止使用量子寄存器 (行 {op.line})")
+
+    @staticmethod
+    def validate_cldr_cstr_operands(opcode, operands):
+        if len(operands) < 2:
+            raise SyntaxError(f"{opcode}需要两个操作数")
+        first, second = operands[0], operands[1]
+        if opcode == "CLDR":
+            if not first.value.startswith('c[') or not second.value.startswith('M['):
+                raise SyntaxError(f"CLDR格式应为c[X], M[Y] (行 {first.line})")
+        elif opcode == "CSTR":
+            if not first.value.startswith('c[') or not second.value.startswith('M['):
+                raise SyntaxError(f"CSTR格式应为c[X], M[Y] (行 {first.line})")
+
+"""
     def loop(self):
-        """ 解析循环结构 """
+        ### 解析循环结构
         start_label = None
         end_label = None
         # 寻找循环的开始标签
@@ -374,3 +559,4 @@ class Parser:
             else:
                 raise SyntaxError(f"循环结束条件不匹配: 期望 {start_label}, 但得到 {condition.children[1].value} (行 {self.current_token[2]}, 列 {self.current_token[3]})")
         return ASTNode("Loop", None, [start_label, loop_body, end_label], line=self.current_token[2], col=self.current_token[3])
+"""
