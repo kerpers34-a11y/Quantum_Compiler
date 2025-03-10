@@ -1088,6 +1088,6 @@ class Evaluator:
 
         print("Program Counter (PC):", self.env.pc)
         print("Link Register (LR):", self.env.lr)
-        print("Density Matrix:")
-        print(self.env.density_matrix)
+        #print("Density Matrix:")
+        #print(self.env.density_matrix)
 

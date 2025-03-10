@@ -138,6 +138,7 @@ ast = ASTNode('Program', children=[
             ASTNode('Operand', value=['c[2]']),
         ]),
     ]),
+    ASTNode('Label', value=['start']),
     ASTNode('Instruction', children=[
         ASTNode('Opcode', value=['MOV']),
         ASTNode('Operands', children=[
@@ -170,10 +171,18 @@ ast = ASTNode('Program', children=[
         ]),
     ]),
     ASTNode('Instruction', children=[
+        ASTNode('Opcode', value=['debug']),
+    ]),
+    ASTNode('Instruction', children=[
+        ASTNode('Opcode', value=['BNE']),
+        ASTNode('Operands', children=[
+            ASTNode('Label', value=['start'])
+        ])
+    ]),
+    ASTNode('Instruction', children=[
         ASTNode('Opcode', value=['XQI-END']),
     ]),
 ])
-
 
 
 env = QuantumEnvironment(simulation_mode='statevector')
