@@ -10,7 +10,13 @@ class ASTNode:
         self.col = col
 
     def __repr__(self):
-        return f"{self.type}({self.value}, {self.children}, line={self.line}, col={self.col})"
+        children_repr = []
+        for child in self.children:
+            if isinstance(child, ASTNode):
+                children_repr.append(str(child))
+            else:
+                children_repr.append(repr(child))
+        return f"ASTNode('{self.type}', value={self.value}, children=[{', '.join(children_repr)}])"
 
     def convert_children_to_token(self, token_map):
         if not self.children:  # 如果是叶子节点
@@ -100,21 +106,19 @@ class Parser:
 
     def xqi_begin(self):
         """ 解析 XQI-BEGIN """
-        node = ASTNode("XQI-BEGIN", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
+        opcode_node = ASTNode("Opcode", 'XQI-BEGIN', line=self.current_token[2], col=self.current_token[3])
         self.eat('XQI_BEGIN')
-        # 忽略后面的分号
         if self.current_token[0] == 'ASSIGN':
             self.eat('ASSIGN')
-        return node
+        return ASTNode("Instruction", children=[opcode_node])
 
     def xqi_end(self):
         """ 解析 XQI-END """
-        node = ASTNode("XQI-END", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
+        opcode_node = ASTNode("Opcode", 'XQI-END', line=self.current_token[2], col=self.current_token[3])
         self.eat('XQI_END')
-        # 忽略后面的分号
         if self.current_token[0] == 'ASSIGN':
             self.eat('ASSIGN')
-        return node
+        return ASTNode("Instruction", children=[opcode_node])
 
     def statement(self):
         """ 解析语句（指令、分支、过程调用、过程定义）"""
@@ -158,10 +162,9 @@ class Parser:
 
     def process_definition(self):
         """ 解析过程定义 (label:) """
-        node = ASTNode("ProcessDefinition", self.current_token[1][:-1], line=self.current_token[2],
-                       col=self.current_token[3])  # 移除 `:` 符号
+        label_name = self.current_token[1][:-1]  # 移除冒号
+        node = ASTNode("Label", label_name, line=self.current_token[2], col=self.current_token[3])
         self.eat('LABEL_DEF')
-        # 忽略后面的分号
         if self.current_token[0] == 'ASSIGN':
             self.eat('ASSIGN')
         return node
@@ -353,31 +356,28 @@ class Parser:
             raise SyntaxError(f"语法错误: 期望操作码，但得到 {token[0]} (行 {token[2]}, 列 {token[3]})")
 
     def operand_list(self):
-        """ 解析操作数，支持 U3(参数, 参数, 参数) q[n]; 和 measure R[2] -> R[3]; """
         node = ASTNode("Operands", line=self.current_token[2], col=self.current_token[3])
-        # 处理括号参数（如 U3(0.233, R[3], 0.14567)）
+        # 处理括号参数
         if self.current_token[0] == 'LPAREN':
             self.eat('LPAREN')
-            params = ASTNode("Parameters", line=self.current_token[2], col=self.current_token[3])
             while self.current_token[0] not in ('RPAREN', 'EOF'):
-                params.children.append(self.operand())
+                node.children.append(self.operand())
                 if self.current_token[0] == 'COMMA':
                     self.eat('COMMA')
-            self.eat('RPAREN')  # 消耗 )
-            node.children.append(params)
-        # 处理普通操作数（寄存器、立即数、标签等）
-        operands = []
-        while self.current_token[0] in ('REGISTER', 'REGISTER_M', 'REGISTER_C', 'REGISTER_Q',
-                                        'REGISTER_LR', 'REGISTER_PC', 'IMMEDIATE', 'NUMBER', 'COMPLEX','LABEL'):
-            operands.append(self.operand())
-            if self.current_token[0] == 'COMMA':  # 处理 , 逗号分隔的操作数
+            self.eat('RPAREN')
+
+        # 处理普通操作数
+        while self.current_token[0] in ('REGISTER', 'REGISTER_M', 'REGISTER_C',
+                                        'REGISTER_Q', 'IMMEDIATE', 'NUMBER', 'LABEL'):
+            node.children.append(self.operand())
+            if self.current_token[0] == 'COMMA':
                 self.eat('COMMA')
-        # 处理 -> 语法（将 `->` 视为 `,` 逗号，使 measure 解析方式与 ADD 统一）
-        if self.current_token[0] == 'ARROW':  # 检测 ->
+
+        # 处理measure的特殊语法
+        if self.current_token[0] == 'ARROW':
             self.eat('ARROW')
-            operands.append(ASTNode("ARROW", "->", line=self.current_token[2], col=self.current_token[3]))  # 添加 -> 作为节点
-            operands.append(self.operand())  # 解析箭头后面的目标寄存器
-        node.children.extend(operands)
+            node.children.append(self.operand())
+
         return node
 
     def operand(self):
@@ -425,22 +425,26 @@ class Parser:
         return node
 
     def unconditional_branch(self):
-        """ 解析无条件跳转和过程调用 (B label; or BL label;) """
-        opcode = ASTNode("Opcode", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
-        self.eat('OPCODE')
-        label = ASTNode("Label", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
+        opcode_node = ASTNode("Opcode", self.current_token[1])
+        self.eat(self.current_token[0])
+        label_node = ASTNode("Label", self.current_token[1])
         self.eat('LABEL')
         self.eat('ASSIGN')
-        return ASTNode("UnconditionalBranch", None, [opcode, label], line=self.current_token[2], col=self.current_token[3])
+        return ASTNode("Instruction", children=[
+            opcode_node,
+            ASTNode("Operands", children=[label_node])
+        ])
 
     def conditional_branch(self):
-        """ 解析条件分支 (BEQ|BNE|BGT|BGE|BLT|BLE label;) """
-        opcode = ASTNode("Opcode", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
-        self.eat('OPCODE')
-        label = ASTNode("Label", self.current_token[1], line=self.current_token[2], col=self.current_token[3])
+        opcode_node = ASTNode("Opcode", self.current_token[1])
+        self.eat(self.current_token[0])
+        label_node = ASTNode("Label", self.current_token[1])
         self.eat('LABEL')
         self.eat('ASSIGN')
-        return ASTNode("ConditionalBranch", None, [opcode, label], line=self.current_token[2], col=self.current_token[3])
+        return ASTNode("Instruction", children=[
+            opcode_node,
+            ASTNode("Operands", children=[label_node])
+        ])
 
     @staticmethod
     def validate_mov_operands(operands):
