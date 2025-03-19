@@ -10,28 +10,9 @@ class ASTNode:
         self.col = col
 
     def __repr__(self):
-        children_repr = []
-        for child in self.children:
-            if isinstance(child, ASTNode):
-                children_repr.append(str(child))
-            else:
-                children_repr.append(repr(child))
+        children_repr = [str(child) if isinstance(child, ASTNode) else repr(child)
+                        for child in self.children]
         return f"ASTNode('{self.type}', value={self.value}, children=[{', '.join(children_repr)}])"
-
-    def convert_children_to_token(self, token_map):
-        if not self.children:  # 如果是叶子节点
-            if self.value is None:
-                print(f"警告：节点值为 None，跳过匹配 (行 {self.line}, 列 {self.col})")
-                return  # 直接返回，避免继续处理
-            for token_name, pattern in token_map:
-                if re.match(pattern, self.value):
-                    self.children = [token_name]
-                    break
-        else:
-            for child in self.children:
-                if isinstance(child, ASTNode):
-                    child.convert_children_to_token(token_map)
-
 
 class Parser:
     def __init__(self, lexer):
@@ -98,9 +79,6 @@ class Parser:
             program_node.children.append(self.xqi_end())  # 调用 xqi_end 方法
         else:
             raise SyntaxError(f"程序必须以 XQI-END 结束 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-
-        # 转换 children 为 token 名
-        program_node.convert_children_to_token(self.token_map)
 
         return program_node
 

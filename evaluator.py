@@ -15,7 +15,7 @@ def collect_labels(ast):
     pc = 0
     for node in ast.children:
         if node.type == 'Label':
-            label = node.value[0]
+            label = node.value
             labels[label] = pc
         elif node.type == 'Instruction':
             pc += 1
@@ -36,30 +36,23 @@ class QuantumEnvironment:
         self.simulation_mode = simulation_mode.lower()
         self.max_registers = max_registers
         self.max_memory = max_memory
-
         # 初始化量子寄存器大小和经典寄存器大小
         self._initial_qreg_size = qreg_size
         self._initial_creg_size = creg_size
-
         # 初始化量子态
         self.quantum_state = []
         self._reset_quantum_register(qreg_size)  # 调用内部重置方法
-
         # 初始化经典寄存器（兼容复数测量结果）
         self._initial_creg = np.zeros(creg_size, dtype=np.complex128)
         self.creg = self._initial_creg.copy()
-
         # 初始化通用寄存器和存储
         self.registers = np.zeros(max_registers, dtype=np.float64)
         self.memory = np.zeros(max_memory, dtype=np.float64)
-
         # 控制寄存器
         self.pc = 0  # 程序计数器
         self.lr = 0  # 链接寄存器
-
         self.SF = 0  # 符号标志（负数）
         self.ZF = 0  # 零标志
-
         # 错误模型
         self.error_model = None
 
@@ -108,7 +101,6 @@ class QuantumEnvironment:
         """构建作用于指定量子位的多量子位算子"""
         full_ops = []
         dim = 2 ** self.qreg_size
-
         for op in ops:
             full_op = np.eye(1, dtype=np.complex128)
             for qubit in range(self.qreg_size):
@@ -117,7 +109,6 @@ class QuantumEnvironment:
                 else:
                     full_op = np.kron(full_op, np.eye(2))
             full_ops.append(full_op)
-
         return full_ops
 
     def reset(self):
@@ -139,7 +130,6 @@ class QuantumEnvironment:
                 proj0[i, i] = 1
             else:
                 proj1[i, i] = 1
-
         # 基础测量过程
         if self.simulation_mode == 'statevector':
             prob0 = np.vdot(self.quantum_state, proj0 @ self.quantum_state).real
@@ -159,16 +149,13 @@ class QuantumEnvironment:
                 result = 1
                 new_state = (proj1 @ self.quantum_state @ proj1) / (1 - prob0)
             self.quantum_state = new_state
-
         # 应用测量噪声模型
-
         if (self.simulation_mode != 'statevector'
-                    and self.error_model
-                    and self.error_model[0] == 9):
+            and self.error_model
+            and self.error_model[0] == 9):
             p_error = self.error_model[1]  # 单比特错误概率
             if np.random.rand() < p_error:
                 result ^= 1  # 翻转测量结果
-
         # 存储结果（保持复数形式兼容性）
         self.creg[creg_index] = complex(result)
 
@@ -176,10 +163,8 @@ class QuantumEnvironment:
         """应用当前配置的量子噪声"""
         if not self.error_model or self.error_model[0] == 9:
             return  # 测量错误单独处理
-
         noise_type, *params = self.error_model
         kraus_ops = self.generate_kraus_operators(noise_type, qubits, params)
-
         if self.simulation_mode == 'statevector':
             # 计算各Kraus算子的概率
             probs = np.array([np.linalg.norm(k_op @ self.quantum_state) ** 2 for k_op in kraus_ops])
@@ -195,6 +180,9 @@ class QuantumEnvironment:
     def generate_kraus_operators(self, noise_type, qubits, params):
         """生成对应噪声模型的Kraus算子"""
         operators = []
+        # 确保 qubits 是一个列表（即使只有一个量子位）
+        if not isinstance(qubits, list):
+            qubits = [qubits]
         # 解极化噪声 (类型1)
         if noise_type == 1:
             p = params[0] if params else config.default_Q1_error_Probability
@@ -220,7 +208,6 @@ class QuantumEnvironment:
                     else:
                         current_op = np.kron(op_list[q_idx], current_op)
                 operators.append(current_op)
-
         # 幅度阻尼 (类型2)
         elif noise_type == 2:
             gamma = params[0] if params else config.default_amp_damping_gamma
@@ -231,7 +218,6 @@ class QuantumEnvironment:
                 k1 = np.array([[0, np.sqrt(gamma)],
                                [0, 0]], dtype=np.complex128)
                 per_qubit_ops.append([k0, k1])
-
             # 生成所有可能的算子组合
             for combo in product(*per_qubit_ops):
                 # 初始化操作列表（按qreg_size顺序）
@@ -239,7 +225,6 @@ class QuantumEnvironment:
                 # 填充当前组合的算子
                 for q, op in zip(qubits, combo):
                     op_list[q] = op
-
                 # 构建全系统算子（从最高位到最低位）
                 current_op = None
                 for q_idx in reversed(range(self.qreg_size)):
@@ -247,9 +232,7 @@ class QuantumEnvironment:
                         current_op = op_list[q_idx]
                     else:
                         current_op = np.kron(op_list[q_idx], current_op)
-
                 operators.append(current_op)
-
         # 相位阻尼 (类型3)
         elif noise_type == 3:
             gamma = params[0] if params else config.default_phase_damping_gamma
@@ -260,20 +243,16 @@ class QuantumEnvironment:
                 k1 = np.array([[0, 0],
                                [0, np.sqrt(gamma)]], dtype=np.complex128)
                 per_qubit_ops.append([k0, k1])
-
             for combo in product(*per_qubit_ops):
                 op_list = [np.eye(2) for _ in range(self.qreg_size)]
                 for q, op in zip(qubits, combo):
                     op_list[q] = op
-
                 # 张量积构建（注意量子位顺序）
                 current_op = None
                 for q_idx in reversed(range(self.qreg_size)):
                     current_op = op_list[q_idx] if current_op is None \
                         else np.kron(op_list[q_idx], current_op)
-
                 operators.append(current_op)
-
         # 重置误差 (类型8)
         elif noise_type == 8:
             p = params[0] if params else config.default_reset_error_Probability
@@ -284,12 +263,10 @@ class QuantumEnvironment:
                 k1 = np.sqrt(p) * np.array([[1, 1], [0, 0]])  # 重置到|0>
                 k2 = np.sqrt(p) * np.array([[0, 0], [1, 1]])  # 重置到|1>
                 per_qubit_ops.append([k0, k1, k2])
-
             for combo in product(*per_qubit_ops):
                 op_list = [np.eye(2) for _ in range(self.qreg_size)]
                 for q, op in zip(qubits, combo):
                     op_list[q] = op
-
                 # 逆序构建张量积
                 full_op = None
                 for q_idx in reversed(range(self.qreg_size)):
@@ -297,12 +274,9 @@ class QuantumEnvironment:
                         full_op = op_list[q_idx]
                     else:
                         full_op = np.kron(op_list[q_idx], full_op)
-
                 operators.append(full_op)
-
         else:
             raise ValueError(f"Unsupported noise type: {noise_type}")
-
         self.validate_kraus_ops(operators)
         return operators
 
@@ -312,7 +286,6 @@ class QuantumEnvironment:
         # 处理空操作符列表的特殊情况
         if not operators:
             raise ValueError("Kraus operators list cannot be empty")
-
         # 获取维度信息并校验矩阵形状
         first_op = operators[0]
         if not isinstance(first_op, np.ndarray):
@@ -320,7 +293,6 @@ class QuantumEnvironment:
         dim = first_op.shape[0]
         if first_op.ndim != 2 or dim != first_op.shape[1]:
             raise ValueError("Kraus operators must be square matrices")
-
         # 计算总和并校验维度一致性
         sum_product = np.zeros((dim, dim), dtype=np.complex128)  # 确保 sum_product 始终被初始化
         if dim < 1024:
@@ -336,11 +308,9 @@ class QuantumEnvironment:
                         op.conj().T[i:i + block_size, j:j + block_size] @ op[i:i + block_size, j:j + block_size]
                         for op in operators)
                     sum_product[i:i + block_size, j:j + block_size] = block
-
         # 生成单位矩阵并设置合理容差
         identity = np.eye(dim, dtype=np.complex128)
         atol = max(1e-12, np.finfo(sum_product.dtype).eps * 1e4)  # 自适应浮点精度
-
         if not np.allclose(sum_product, identity, rtol=float(0), atol=float(atol)):
             max_error = np.max(np.abs(sum_product - identity))
             raise ValueError(
@@ -366,7 +336,7 @@ class Evaluator:
             if node.type == 'Instruction':
                 for child in node.children:
                     if child.type == 'Opcode':
-                        opcode = child.value[0]
+                        opcode = child.value
                         # 收集所有配置指令（包括shot）
                         if opcode in ['error', 'qreg', 'creg', 'shot']:
                             if node not in config_instructions:
@@ -384,7 +354,7 @@ class Evaluator:
 
         # 第三阶段：提取shots参数
         operands_node = next((c for c in shot_instruction.children if c.type == 'Operands'), None)
-        shots = int(operands_node.children[0].value[0])  # 从已执行的shot指令中获取参数
+        shots = int(operands_node.children[0].value)  # 从已执行的shot指令中获取参数
 
         # 第四阶段：收集body指令（排除所有配置指令）
         self.body_instructions = [
@@ -400,7 +370,6 @@ class Evaluator:
             for instr_node in self.body_instructions:
                 self.execute_instruction(instr_node)
             results.append(self.env.creg.copy())
-
         print(f"\nResults after {shots} shots: {results}")
 
     def execute_instruction(self, node):
@@ -417,8 +386,7 @@ class Evaluator:
             if not opcode_node:
                 raise ValueError("Instruction missing opcode")
 
-            opcode = opcode_node.value[0]
-
+            opcode = opcode_node.value
             if opcode == 'shot':
                 self.execute_shot(node)
             elif opcode == 'error':
@@ -485,27 +453,28 @@ class Evaluator:
                 pass
             else:
                 raise ValueError(f"Unknown opcode: {opcode}")
-        # 在量子操作后应用噪声
-        if node.type == 'Opcode' and node.value[0] in ['CNOT', 'U3']:
-            qubits = self._get_affected_qubits(node)
-            self.env.apply_quantum_noise(qubits)
 
-        # 分支指令列表
-        branch_ops = {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'}
-        if node.type == 'Opcode' and node.value[0] in branch_ops:
-            pass  # 分支指令已显式设置PC
-        else:
-            self.env.pc += 1  # 非分支指令自动递增
+            # 在量子操作后应用噪声
+            if node.type == 'Opcode' and node.value in ['CNOT', 'U3']:
+                qubits = self._get_affected_qubits(self,node)
+                self.env.apply_quantum_noise(qubits)
+
+            # 分支指令列表
+            branch_ops = {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'}
+            if node.type == 'Opcode' and node.value in branch_ops:
+                pass  # 分支指令已显式设置PC
+            else:
+                self.env.pc += 1  # 非分支指令自动递增
 
     @staticmethod
-    def _get_affected_qubits(node):
+    def _get_affected_qubits(self, node):
         """获取指令影响的量子位"""
-        opcode = node.value[0]
+        opcode = node.value
         if opcode == 'CNOT':
-            return [int(node.children[0].value[0][1:-1]),
-                    int(node.children[1].value[0][1:-1])]
+            return [int(node.children[0].value[2:-1]),
+                    int(node.children[1].value[2:-1])]
         elif opcode == 'U3' or opcode == 'measure':
-            return [int(node.children[-1].value[0][1:-1])]
+            return [int(node.children[-1].value[2:-1])]
         return []
 
     def execute_shot(self, node):
@@ -513,18 +482,24 @@ class Evaluator:
 
     def execute_error(self, instruction_node):
         # 从Instruction节点中获取Operands
-        print(f"\n123{instruction_node}")
         operands_node = next((c for c in instruction_node.children if c.type == 'Operands'), None)
+
         if not operands_node or len(operands_node.children) < 2:
+            # 如果只有一个操作数，则为第二个操作数设置默认值
+            if len(operands_node.children) == 1:
+                operands_node.children.append(ASTNode('Operand', value=config.default_Q_error_Code))  # 添加默认的第二个操作数
+
+        # 检查是否有至少两个操作数
+        if len(operands_node.children) < 1:
             raise ValueError("Invalid error instruction format")
 
         # 提取第一个操作数作为error_type
         error_type_operand = operands_node.children[0]
-        error_type = int(error_type_operand.value[0])
+        error_type = int(error_type_operand.value)
         print(f"\nerror_type={error_type}")
 
         # 提取后续操作数作为参数
-        params = [float(op.value[0]) for op in operands_node.children[1:]]
+        params = [float(op.value) for op in operands_node.children[1:]]
 
         # 设置错误模型
         self.env.error_model = (error_type, *params)
@@ -536,14 +511,12 @@ class Evaluator:
             raise ValueError("qreg instruction missing operands")
 
         # 从第一个操作数提取字符串
-        operand_str = operands_node.children[0].value[0]
-
+        operand_str = operands_node.children[0].value
         # 解析寄存器大小
         left = operand_str.find('[')
         right = operand_str.find(']')
         if left == -1 or right == -1 or right <= left:
             raise ValueError(f"Invalid qreg format: {operand_str}")
-
         qreg_size = int(operand_str[left + 1:right])
         self.env.resize_qreg(qreg_size)
 
@@ -554,14 +527,12 @@ class Evaluator:
             raise ValueError("creg instruction missing operands")
 
         # 从第一个操作数提取字符串
-        operand_str = operands_node.children[0].value[0]
-
+        operand_str = operands_node.children[0].value
         # 解析寄存器大小
         left = operand_str.find('[')
         right = operand_str.find(']')
         if left == -1 or right == -1 or right <= left:
             raise ValueError(f"Invalid creg format: {operand_str}")
-
         creg_size = int(operand_str[left + 1:right])
         self.env._initial_creg = np.zeros(creg_size, dtype=np.complex128)
         self.env.creg = self.env._initial_creg.copy()
@@ -573,8 +544,8 @@ class Evaluator:
             raise ValueError(f"MOV instruction requires 2 operands: {node}")
 
         # 提取操作数字符串
-        dest_operand = operands_node.children[0].value[0]
-        src_operand = operands_node.children[1].value[0]
+        dest_operand = operands_node.children[0].value
+        src_operand = operands_node.children[1].value
 
         # 解析目标操作数
         def parse_operand(op_str):
@@ -604,6 +575,14 @@ class Evaluator:
             self.env.pc = self.env.registers[src_val]
         elif dest_type == 'LR' and src_type == 'R':
             self.env.lr = self.env.registers[src_val]
+        elif dest_type == 'PC' and src_type == 'LR':
+            self.env.pc = self.env.lr
+        elif dest_type == 'LR' and src_type == 'PC':
+            self.env.lr = self.env.pc
+        elif dest_type == 'PC' and src_type == 'imm':
+            self.env.pc = src_val
+        elif dest_type == 'LR' and src_type == 'imm':
+            self.env.lr = src_val
         else:
             raise ValueError(f"Unsupported MOV combination: {dest_operand} <- {src_operand}")
 
@@ -618,14 +597,14 @@ class Evaluator:
         lambda_ = self._parse_parameter(operands_node.children[2], 'R')
 
         # 解析第四个参数为量子寄存器
-        qubit = self._parse_register_index(operands_node.children[3].value[0], 'q')
+        qubit = self._parse_register_index(operands_node.children[3].value, 'q')
 
         # 量子寄存器范围检查
         if qubit >= self.env.qreg_size:
             raise ValueError(f"U3 qubit index out of range: {qubit} (qreg_size={self.env.qreg_size})")
 
         # 构建量子门
-        u3_gate = self._create_u3_gate(theta, phi, lambda_)
+        u3_gate = self.create_u3_gate(theta, phi, lambda_)
         self._apply_single_qubit_gate(u3_gate, qubit)
 
     def execute_cnot(self, node):
@@ -634,10 +613,10 @@ class Evaluator:
             raise ValueError("CNOT requires control and target qubits")
 
         # 解析量子寄存器参数
-        control = self._parse_register_index(operands_node.children[0].value[0], 'q')
-        target = self._parse_register_index(operands_node.children[1].value[0], 'q')
+        control = self._parse_register_index(operands_node.children[0].value, 'q')
+        target = self._parse_register_index(operands_node.children[1].value, 'q')
 
-        # 有效性检查
+        # 合法性检查
         if control == target:
             raise ValueError("CNOT control and target qubits cannot be the same")
         if control >= self.env.qreg_size or target >= self.env.qreg_size:
@@ -655,7 +634,7 @@ class Evaluator:
         delta = self._parse_parameter(operands_node.children[0], 'R')
 
         # 验证第二个参数格式（q寄存器）
-        self._parse_register_index(operands_node.children[1].value[0], 'q')
+        self._parse_register_index(operands_node.children[1].value, 'q')
 
         # 应用全局相位
         phase = np.exp(1j * delta)
@@ -671,7 +650,7 @@ class Evaluator:
     # 辅助方法 ---------------------------------------------------
     def _parse_parameter(self, operand_node, register_prefix):
         """解析混合参数（立即数/寄存器）"""
-        value_str = operand_node.value[0]
+        value_str = operand_node.value
         try:
             # 尝试解析为立即数
             return float(value_str)
@@ -681,7 +660,7 @@ class Evaluator:
             return self.env.registers[reg_index]
 
     @staticmethod
-    def _create_u3_gate(theta, phi, lambda_):
+    def create_u3_gate(theta, phi, lambda_):
         """创建U3门矩阵"""
         return np.array([
             [np.cos(theta / 2), -np.exp(1j * lambda_) * np.sin(theta / 2)],
@@ -724,8 +703,8 @@ class Evaluator:
             raise ValueError("MEASURE requires 2 operands (qubit, creg)")
 
         # 解析量子寄存器和经典寄存器
-        qubit = self._parse_register_index(operands_node.children[0].value[0], 'q')
-        creg_idx = self._parse_register_index(operands_node.children[1].value[0], 'c')
+        qubit = self._parse_register_index(operands_node.children[0].value, 'q')
+        creg_idx = self._parse_register_index(operands_node.children[1].value, 'c')
 
         # 寄存器范围校验
         if qubit >= self.env.qreg_size:
@@ -742,17 +721,15 @@ class Evaluator:
         # 存储结果并应用噪声
         self.env.creg[creg_idx] = result
         if self.env.error_model:
-            self.env.apply_classical_noise(creg_idx)  # 新增经典寄存器噪声
+            self.env.apply_quantum_noise(creg_idx)
 
     def _create_measurement_projectors(self, qubit):
         """创建测量投影矩阵（兼容不同位序表示）"""
         # 调整量子位序为高位优先
         target_bit = self.env.qreg_size - 1 - qubit
         dim = 2 ** self.env.qreg_size
-
         proj0 = np.zeros((dim, dim))
         proj1 = np.zeros((dim, dim))
-
         for i in range(dim):
             if (i >> target_bit) & 1 == 0:
                 proj0[i, i] = 1
@@ -782,16 +759,15 @@ class Evaluator:
 
     def execute_add(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        dest = self._parse_register_index(operands_node.children[0].value[0], 'R')
+        dest = self._parse_register_index(operands_node.children[0].value, 'R')
 
         # 解析源操作数（可以是寄存器或立即数）
-        src1 = self._parse_operand(operands_node.children[1].value[0])
-        src2 = self._parse_operand(operands_node.children[2].value[0])
+        src1 = self._parse_operand(operands_node.children[1].value)
+        src2 = self._parse_operand(operands_node.children[2].value)
 
         # 处理立即数
         val1 = src1 if isinstance(src1, (int, float)) else self.env.registers[src1]
         val2 = src2 if isinstance(src2, (int, float)) else self.env.registers[src2]
-
         self.env.registers[dest] = val1 + val2
         self._set_flags(self.env.registers[dest])
 
@@ -799,11 +775,9 @@ class Evaluator:
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 3:
             raise ValueError("MUL instruction requires 3 operands")
-
-        dest = self._parse_register_index(operands_node.children[0].value[0], 'R')
-        src1 = self._parse_register_index(operands_node.children[1].value[0], 'R')
-        src2 = self._parse_register_index(operands_node.children[2].value[0], 'R')
-
+        dest = self._parse_register_index(operands_node.children[0].value, 'R')
+        src1 = self._parse_register_index(operands_node.children[1].value, 'R')
+        src2 = self._parse_register_index(operands_node.children[2].value, 'R')
         result = self.env.registers[src1] * self.env.registers[src2]
         self.env.registers[dest] = result
         self._set_flags(result)
@@ -812,15 +786,13 @@ class Evaluator:
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 3:
             raise ValueError("DIV instruction requires 3 operands")
-
-        dest = self._parse_register_index(operands_node.children[0].value[0], 'R')
-        src1 = self._parse_register_index(operands_node.children[1].value[0], 'R')
-        src2 = self._parse_register_index(operands_node.children[2].value[0], 'R')
+        dest = self._parse_register_index(operands_node.children[0].value, 'R')
+        src1 = self._parse_register_index(operands_node.children[1].value, 'R')
+        src2 = self._parse_register_index(operands_node.children[2].value, 'R')
 
         # 添加除零检查
         if self.env.registers[src2] == 0:
             raise ValueError("Division by zero")
-
         result = self.env.registers[src1] // self.env.registers[src2]
         self.env.registers[dest] = result
         self._set_flags(result)
@@ -832,15 +804,15 @@ class Evaluator:
             raise ValueError("SUB instruction requires 3 operands")
 
         # 解析目标寄存器
-        dest_str = operands_node.children[0].value[0]
+        dest_str = operands_node.children[0].value
         dest = self._parse_register_index(dest_str, prefix='R')
 
         # 解析源寄存器1
-        src1_str = operands_node.children[1].value[0]
+        src1_str = operands_node.children[1].value
         src1 = self._parse_register_index(src1_str, prefix='R')
 
         # 解析源寄存器2
-        src2_str = operands_node.children[2].value[0]
+        src2_str = operands_node.children[2].value
         src2 = self._parse_register_index(src2_str, prefix='R')
 
         # 执行运算
@@ -862,7 +834,6 @@ class Evaluator:
         # 带详细错误信息的解析
         if not reg_str.startswith(prefix):
             raise ValueError(f"Expected {prefix} register, got {reg_str}")
-
         try:
             index = int(reg_str[len(prefix) + 1:-1])  # 解析类似 q[5] 的格式
         except (ValueError, IndexError):
@@ -874,7 +845,6 @@ class Evaluator:
                 len(self.env.creg)
         if index >= max_size:
             raise ValueError(f"{prefix} register index out of range: {index} (max={max_size - 1})")
-
         return index
 
     def _parse_operand(self, operand_str):
@@ -887,7 +857,7 @@ class Evaluator:
                 'q' if operand_str.startswith('q') else 'c'
             return self._parse_register_index(operand_str, prefix)
 
-        # 通用标志位设置方法
+    # 通用标志位设置方法
     def _set_flags(self, value):
         self.env.SF = 1 if value < 0 else 0
         self.env.ZF = 1 if value == 0 else 0
@@ -926,19 +896,18 @@ class Evaluator:
             self.env.pc = self._get_label_address(label)
         else:
             self.env.pc += 1  # 自动递增PC
+
     # 辅助方法 ---------------------------------------------------
     @staticmethod
     def _parse_label_operand(node):
         """从分支指令节点解析标签操作数"""
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
-            raise ValueError(f"{node.children[0].value[0]} instruction missing label operand")
-
+            raise ValueError(f"{node.children[0].value} instruction missing label operand")
         label_operand = operands_node.children[0]
         if label_operand.type != 'Label':
             raise ValueError(f"Expected label operand, got {label_operand.type}")
-
-        return label_operand.value[0].strip(':')  # 去除可能存在的冒号
+        return label_operand.value.strip(':')  # 去除可能存在的冒号
 
     def _get_label_address(self, label):
         """获取标签地址并验证存在性"""
@@ -966,10 +935,10 @@ class Evaluator:
             raise ValueError("LDR requires 2 operands (dest_reg, src_mem)")
 
         # 解析目标寄存器 R[...]
-        dest_reg = self._parse_register_index(operands_node.children[0].value[0], 'R')
+        dest_reg = self._parse_register_index(operands_node.children[0].value, 'R')
 
         # 解析源内存地址 M[...]
-        src_mem = self._parse_memory_address(operands_node.children[1].value[0])
+        src_mem = self._parse_memory_address(operands_node.children[1].value)
 
         # 执行加载操作
         self.env.registers[dest_reg] = self.env.memory[src_mem]
@@ -980,10 +949,10 @@ class Evaluator:
             raise ValueError("STR requires 2 operands (src_reg, dest_mem)")
 
         # 解析源寄存器 R[...]
-        src_reg = self._parse_register_index(operands_node.children[0].value[0], 'R')
+        src_reg = self._parse_register_index(operands_node.children[0].value, 'R')
 
         # 解析目标内存地址 M[...]
-        dest_mem = self._parse_memory_address(operands_node.children[1].value[0])
+        dest_mem = self._parse_memory_address(operands_node.children[1].value)
 
         # 执行存储操作
         self.env.memory[dest_mem] = self.env.registers[src_reg]
@@ -994,11 +963,11 @@ class Evaluator:
             raise ValueError("CLDR requires 3 operands (dest_creg, real_mem, imag_mem)")
 
         # 解析目标经典寄存器 c[...]
-        dest_creg = self._parse_register_index(operands_node.children[0].value[0], 'c')
+        dest_creg = self._parse_register_index(operands_node.children[0].value, 'c')
 
         # 解析实部和虚部内存地址
-        real_mem = self._parse_memory_address(operands_node.children[1].value[0])
-        imag_mem = self._parse_memory_address(operands_node.children[2].value[0])
+        real_mem = self._parse_memory_address(operands_node.children[1].value)
+        imag_mem = self._parse_memory_address(operands_node.children[2].value)
 
         # 构建复数并存储
         self.env.creg[dest_creg] = complex(
@@ -1012,11 +981,11 @@ class Evaluator:
             raise ValueError("CSTR requires 3 operands (src_creg, real_mem, imag_mem)")
 
         # 解析源经典寄存器 c[...]
-        src_creg = self._parse_register_index(operands_node.children[0].value[0], 'c')
+        src_creg = self._parse_register_index(operands_node.children[0].value, 'c')
 
         # 解析目标内存地址
-        real_mem = self._parse_memory_address(operands_node.children[1].value[0])
-        imag_mem = self._parse_memory_address(operands_node.children[2].value[0])
+        real_mem = self._parse_memory_address(operands_node.children[1].value)
+        imag_mem = self._parse_memory_address(operands_node.children[2].value)
 
         # 分解复数并存储
         complex_val = self.env.creg[src_creg]
@@ -1052,7 +1021,11 @@ class Evaluator:
         input("Press 'p' to continue: ")
 
     def execute_reset(self, node):
-        qubit = int(node.children[0].value[0][1:-1])
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if operands_node:
+            qubit = int(operands_node.children[0].value[2:-1])
+        else:
+            raise ValueError("Operands node not found in \"reset\"")
         self.env.quantum_state = np.zeros(2 ** self.env.qreg_size, dtype=np.complex128)
         self.env.quantum_state[0] = 1.0
 
@@ -1065,29 +1038,24 @@ class Evaluator:
         pass
 
     def execute_rand(self, node):
-        dest = int(node.children[0].value[0][2:-1])
-        seed = int(node.children[1].value[0][2:-1])
+        dest = int(node.children[0].value[2:-1])
+        seed = int(node.children[1].value[2:-1])
         np.random.seed(int(self.env.registers[seed]))
         self.env.registers[dest] = np.random.uniform(0, 1)
 
     def print_debug_info(self):
         print("Quantum Register State:")
         print(self.env.quantum_state)
-
         print("Classical Register State:")
         for i, creg in enumerate(self.env.creg):
             print(f"c[{i}]: {creg}")
-
         print("General Purpose Registers:")
         for i, reg in enumerate(self.env.registers):
             print(f"R[{i}]: {reg}")
-
         print("Memory:")
         for i, mem in enumerate(self.env.memory):
             print(f"M[{i}]: {mem}")
-
         print("Program Counter (PC):", self.env.pc)
         print("Link Register (LR):", self.env.lr)
-        #print("Density Matrix:")
-        #print(self.env.density_matrix)
-
+        # print("Density Matrix:")
+        # print(self.env.density_matrix)
