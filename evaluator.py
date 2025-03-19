@@ -1003,22 +1003,6 @@ class Evaluator:
 
     def print_debug_info(self):
         if self.env.simulation_mode == 'statevector':
-
             pass
         else:
             pass
-        # print("Quantum Register State:")
-        # print(self.env.quantum_state)
-        # print("Classical Register State:")
-        # for i, creg in enumerate(self.env.creg):
-        #     print(f"c[{i}]: {creg}")
-        # print("General Purpose Registers:")
-        # for i, reg in enumerate(self.env.registers):
-        #     print(f"R[{i}]: {reg}")
-        # print("Memory:")
-        # for i, mem in enumerate(self.env.memory):
-        #     print(f"M[{i}]: {mem}")
-        # print("Program Counter (PC):", self.env.pc)
-        # print("Link Register (LR):", self.env.lr)
-        # print("Density Matrix:")
-        # print(self.env.density_matrix)

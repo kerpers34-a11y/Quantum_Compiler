@@ -59,6 +59,17 @@ default_measure_error_Probability: Final=0.001
 default_amp_damping_gamma: Final = 0.001   ####################################################???
 default_phase_damping_gamma: Final=0.001  ####################################################???
 
+#####################################################################################
+#####################################################################################
+input_filename_xqiasm = [None] * MAX_Operation_Column
+filename_debug = 'XQI-QC-list.txt'
+filename_debug_matlab = 'XQI-QC-debug.dat'
+filename_state_matlab = 'XQI-QC-state.dat'
+
+filename_debug_Density_Matrix = 'XQI-QC-Density-Matrix-list.txt'
+filename_debug_Density_Matrix_matlab = 'XQI-QC-Density-Matrix-debug.dat'
+filename_Density_Matrix_state_matlab = 'XQI-QC-Density-Matrix-state.dat'
+
 
 
 

@@ -26,22 +26,134 @@ token_map = [
     ('MISMATCH', r'.'),
 ]
 
+
+class DebugInfoGenerator:
+    def __init__(self, code):
+        self.code_lines = code.split('\n')
+        self.debug_message = []
+        self.label_records = []
+        self.xqi_begin_line = None
+        self.xqi_end_line = None
+
+        # 定位XQI区域
+        self._locate_xqi_boundaries()
+        # 生成调试信息
+        self._build_debug_info()
+
+    def _locate_xqi_boundaries(self):
+        """定位XQI-BEGIN和XQI-END的物理行号"""
+        for idx, line in enumerate(self.code_lines):
+            stripped = line.strip()
+            if stripped == "XQI-BEGIN":
+                self.xqi_begin_line = idx
+            elif stripped == "XQI-END":
+                self.xqi_end_line = idx
+
+        if self.xqi_begin_line is None:
+            raise ValueError("Missing XQI-BEGIN declaration")
+        if self.xqi_end_line is None:
+            raise ValueError("Missing XQI-END declaration")
+        if self.xqi_begin_line >= self.xqi_end_line:
+            raise ValueError("XQI-BEGIN must come before XQI-END")
+
+    def _process_single_line(self, raw_line):
+        """处理单行内容并返回需要显示的信息"""
+        stripped = raw_line.strip()
+
+        # 处理空行
+        if not stripped:
+            return None
+
+        # 分离注释和代码部分
+        code_part, _, comment_part = stripped.partition(';')
+        code_part = code_part.strip()
+
+        # 处理标签定义
+        label_match = re.match(r'^([a-zA-Z_]\w*):\s*$', code_part)
+        if label_match:
+            # 独立标签行处理
+            self.label_records.append({
+                'name': label_match.group(1),
+                'sequence': len(self.label_records),
+                'original_line': raw_line
+            })
+            return None
+
+        # 处理包含标签的复合行
+        label_colon = code_part.find(':')
+        if label_colon != -1:
+            label_name = code_part[:label_colon].strip()
+            remaining_code = code_part[label_colon + 1:].strip()
+            self.label_records.append({
+                'name': label_name,
+                'sequence': len(self.label_records),
+                'original_line': raw_line
+            })
+            return remaining_code if remaining_code else None
+
+        # 处理普通代码行
+        display_code = code_part
+        if comment_part:
+            display_code += " ;"
+
+        return display_code
+
+    def _build_debug_info(self):
+        """构建完整的调试信息结构"""
+        self.debug_message = ["", "Operate Instructions:", "XQI-BEGIN"]
+        sequence = 1
+
+        # 处理XQI区域内的每一行
+        for line in self.code_lines[self.xqi_begin_line + 1:self.xqi_end_line]:
+            processed = self._process_single_line(line)
+
+            if processed is not None:
+                self.debug_message.append(f"     {sequence}. {processed}")
+                sequence += 1
+            elif line.strip() == '':  # 保留真实的空行
+                self.debug_message.append("")
+
+        # 添加XQI-END
+        self.debug_message.append("XQI-END")
+
+        # 添加标签表格
+        if self.label_records:
+            self.debug_message += [
+                "",
+                "Label Number   Sequence   Label Symbol",
+                *[f"Label   {i:2d}:      {rec['sequence']:3d}        {rec['name']}"
+                  for i, rec in enumerate(self.label_records)]
+            ]
+
+        # 转换为字符串
+        self.debug_message = '\n'.join(self.debug_message)
+
 # 解析器类
 class Lexer:
     def __init__(self, code):
+        # 原有词法分析初始化
         token_regex = '|'.join(f'(?P<{name}>{pattern})' for name, pattern in token_map)
         self.token_re = re.compile(token_regex)
+        self.token_map = token_map
         self.code = code
         self.tokens = []
-        self.token_map = token_map
-        self.tokenize()
-        # 检查是否存在 XQI-BEGIN 和 XQI-END
-        if not any(token[0] == 'XQI_BEGIN' for token in self.tokens):
-            raise ValueError("错误：缺少 'XQI-BEGIN'")
-        if not any(token[0] == 'XQI_END' for token in self.tokens):
-            raise ValueError("错误：缺少 'XQI-END'")
 
-    def tokenize(self):
+        # 独立生成调试信息
+        self.debug_generator = DebugInfoGenerator(code)
+        self.debug_message = self.debug_generator.debug_message
+
+        # 原有词法分析流程
+        self._tokenize()
+        self._validate_xqi()
+
+    def _validate_xqi(self):
+        """验证XQI标记存在性"""
+        has_begin = any(t[0] == 'XQI_BEGIN' for t in self.tokens)
+        has_end = any(t[0] == 'XQI_END' for t in self.tokens)
+        if not has_begin or not has_end:
+            raise ValueError("Missing XQI boundary markers")
+
+    def _tokenize(self):
         line = 1
         col = 1
         for match in self.token_re.finditer(self.code):
