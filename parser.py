@@ -1,4 +1,3 @@
-import re
 import config
 class ASTNode:
     """ 抽象语法树的通用节点 """

@@ -31,7 +31,7 @@ class QuantumEnvironment:
         # 参数校验
         if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
             raise ValueError("Register sizes must be non-negative integers")
-        self.qreg_size = qreg_size  # 直接保存为实例变量
+        self.qreg_size = qreg_size
         self.creg_size = creg_size
         self.simulation_mode = simulation_mode.lower()
         self.max_registers = max_registers
@@ -59,8 +59,8 @@ class QuantumEnvironment:
     def _reset_quantum_register(self, new_size):
         """重置量子寄存器"""
         self.qreg_size = new_size
-        self._initial_quantum_state = self._initialize_quantum_state(new_size)
-        self.quantum_state = self._initial_quantum_state.copy()
+        self.initial_quantum_state = self._initialize_quantum_state(new_size)
+        self.quantum_state = self.initial_quantum_state.copy()
 
     def resize_qreg(self, new_size):
         """修改量子寄存器大小"""
@@ -84,7 +84,7 @@ class QuantumEnvironment:
 
     def reset_for_shot(self):
         """重置量子及CPSR环境到初始状态"""
-        self.quantum_state = self._initial_quantum_state.copy()
+        self.quantum_state = self.initial_quantum_state.copy()
         self.creg = self._initial_creg.copy()
         self.pc = 0
         self.lr = 0
@@ -113,51 +113,12 @@ class QuantumEnvironment:
 
     def reset(self):
         """重置量子环境到初始状态"""
-        self.quantum_state = self._initial_quantum_state.copy()
+        self.quantum_state = self.initial_quantum_state.copy()
         self.creg = self._initial_creg.copy()
         self.registers.fill(0.0)
         self.memory.fill(0.0)
         self.pc = 0
         self.lr = 0
-
-    def apply_measurement(self, qubit, creg_index):
-        """执行量子测量并处理噪声"""
-        # 生成投影算子
-        proj0 = np.zeros((2 ** self.qreg_size, 2 ** self.qreg_size))
-        proj1 = np.zeros_like(proj0)
-        for i in range(2 ** self.qreg_size):
-            if (i >> qubit) & 1 == 0:
-                proj0[i, i] = 1
-            else:
-                proj1[i, i] = 1
-        # 基础测量过程
-        if self.simulation_mode == 'statevector':
-            prob0 = np.vdot(self.quantum_state, proj0 @ self.quantum_state).real
-            if np.random.rand() < prob0:
-                result = 0
-                new_state = proj0 @ self.quantum_state / np.sqrt(prob0)  # 归一化
-            else:
-                result = 1
-                new_state = proj1 @ self.quantum_state / np.sqrt(1 - prob0)  # 归一化
-            self.quantum_state = new_state
-        else:
-            prob0 = np.trace(proj0 @ self.quantum_state).real
-            if np.random.rand() < prob0:
-                result = 0
-                new_state = (proj0 @ self.quantum_state @ proj0) / prob0
-            else:
-                result = 1
-                new_state = (proj1 @ self.quantum_state @ proj1) / (1 - prob0)
-            self.quantum_state = new_state
-        # 应用测量噪声模型
-        if (self.simulation_mode != 'statevector'
-            and self.error_model
-            and self.error_model[0] == 9):
-            p_error = self.error_model[1]  # 单比特错误概率
-            if np.random.rand() < p_error:
-                result ^= 1  # 翻转测量结果
-        # 存储结果（保持复数形式兼容性）
-        self.creg[creg_index] = complex(result)
 
     def apply_quantum_noise(self, qubits):
         """应用当前配置的量子噪声"""
@@ -370,7 +331,7 @@ class Evaluator:
             for instr_node in self.body_instructions:
                 self.execute_instruction(instr_node)
             results.append(self.env.creg.copy())
-        print(f"\nResults after {shots} shots: {results}")
+        # print(f"\nResults after {shots} shots: {results}")
 
     def execute_instruction(self, node):
         if node.type == 'Instruction':
@@ -496,7 +457,6 @@ class Evaluator:
         # 提取第一个操作数作为error_type
         error_type_operand = operands_node.children[0]
         error_type = int(error_type_operand.value)
-        print(f"\nerror_type={error_type}")
 
         # 提取后续操作数作为参数
         params = [float(op.value) for op in operands_node.children[1:]]
@@ -1022,15 +982,13 @@ class Evaluator:
 
     def execute_reset(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if operands_node:
-            qubit = int(operands_node.children[0].value[2:-1])
-        else:
-            raise ValueError("Operands node not found in \"reset\"")
-        self.env.quantum_state = np.zeros(2 ** self.env.qreg_size, dtype=np.complex128)
-        self.env.quantum_state[0] = 1.0
-
+        qubit = None
+        if operands_node and operands_node.children:
+            qubit = self._parse_register_index(operands_node.children[0].value, 'q')
+        # 调用环境的重置方法，确保根据仿真模式初始化
+        self.env.reset()
         # 应用噪声
-        if self.env.error_model:
+        if self.env.error_model and qubit is not None:
             self.env.apply_quantum_noise([qubit])
 
     def execute_barrier(self, node):
@@ -1044,18 +1002,23 @@ class Evaluator:
         self.env.registers[dest] = np.random.uniform(0, 1)
 
     def print_debug_info(self):
-        print("Quantum Register State:")
-        print(self.env.quantum_state)
-        print("Classical Register State:")
-        for i, creg in enumerate(self.env.creg):
-            print(f"c[{i}]: {creg}")
-        print("General Purpose Registers:")
-        for i, reg in enumerate(self.env.registers):
-            print(f"R[{i}]: {reg}")
-        print("Memory:")
-        for i, mem in enumerate(self.env.memory):
-            print(f"M[{i}]: {mem}")
-        print("Program Counter (PC):", self.env.pc)
-        print("Link Register (LR):", self.env.lr)
+        if self.env.simulation_mode == 'statevector':
+
+            pass
+        else:
+            pass
+        # print("Quantum Register State:")
+        # print(self.env.quantum_state)
+        # print("Classical Register State:")
+        # for i, creg in enumerate(self.env.creg):
+        #     print(f"c[{i}]: {creg}")
+        # print("General Purpose Registers:")
+        # for i, reg in enumerate(self.env.registers):
+        #     print(f"R[{i}]: {reg}")
+        # print("Memory:")
+        # for i, mem in enumerate(self.env.memory):
+        #     print(f"M[{i}]: {mem}")
+        # print("Program Counter (PC):", self.env.pc)
+        # print("Link Register (LR):", self.env.lr)
         # print("Density Matrix:")
         # print(self.env.density_matrix)
