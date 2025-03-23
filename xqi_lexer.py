@@ -129,7 +129,7 @@ class DebugInfoGenerator:
         self.debug_message = '\n'.join(self.debug_message)
 
 # 解析器类
-class Lexer:
+class XQILexer:
     def __init__(self, code):
         # 原有词法分析初始化
         token_regex = '|'.join(f'(?P<{name}>{pattern})' for name, pattern in token_map)
