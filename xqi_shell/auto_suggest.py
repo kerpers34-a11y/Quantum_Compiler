@@ -5,7 +5,7 @@ class CustomAutoSuggest(AutoSuggest):
         # 获取当前输入内容
         text = document.text
 
-        # 定义建议规则（示例：匹配前缀）
+        # 定义规则
         suggestions = {
             "U3": "U3(a,b,c) q[n]",
             "CNOT": "CNOT q[n],q[m]",

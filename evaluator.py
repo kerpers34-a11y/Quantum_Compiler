@@ -481,7 +481,7 @@ class Evaluator:
         self.env.resize_qreg(qreg_size)
 
     def execute_creg(self, node):
-        # 获取Operands子节点（关键修正）
+        # 获取Operands子节点
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
             raise ValueError("creg instruction missing operands")
