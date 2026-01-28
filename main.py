@@ -1,5 +1,7 @@
 import os
 import time
+import shutil
+import subprocess
 
 from pygments.lexer import Lexer
 import config
@@ -136,6 +138,30 @@ def ensure_xqi_tags(content):
 ###################################################################################
 ###################################################################################
 
+def mini_vim(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ('.xqiasm', '.txt'):
+        print(f"不支持的文件类型: {ext}")
+        return
+
+    subprocess.run(["pyvim", filename])
+
+def view_text_file(filename):
+    """统一处理 .xqiasm 和 .txt 文件内容查看"""
+    try:
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in ('.xqiasm', '.txt'):
+            with open(filename, 'r', encoding='utf-8') as f:
+                content = f.read()
+            print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
+        else:
+            print_formatted_text(HTML(f'<cr>不支持的文件类型：</cr><cy2>{ext}</cy2>'), style=style_html)
+    except Exception as e:
+        print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
+
+###################################################################################
+###################################################################################
+
 def handle_file_execution(filename):
     """处理文件执行命令"""
     if os.path.exists(filename):
@@ -253,6 +279,78 @@ def main():
                     f.write(user_input)
 
                 print_formatted_text(HTML(f'<cg>粘贴内容已保存：</cg><cy2>./{filename}</cy2>'), style=style_html)
+
+            elif user_input.strip().startswith('mkdir '):
+                # 创建文件夹
+                folder_name = user_input.strip().split(' ', 1)[1]
+                try:
+                    os.makedirs(folder_name, exist_ok=True)
+                    print_formatted_text(HTML(f'<cg>文件夹已创建：</cg><cy2>{folder_name}</cy2>'), style=style_html)
+                except Exception as e:
+                    print_formatted_text(HTML(f'<cr>创建失败：{str(e)}</cr>'), style=style_html)
+
+            elif user_input.strip().startswith('rm '):
+                # 删除文件或文件夹
+                target = user_input.strip().split(' ', 1)[1]
+                try:
+                    if os.path.isdir(target):
+                        shutil.rmtree(target)
+                        print_formatted_text(HTML(f'<cg>文件夹已删除：</cg><cy2>{target}</cy2>'), style=style_html)
+                    elif os.path.isfile(target):
+                        os.remove(target)
+                        print_formatted_text(HTML(f'<cg>文件已删除：</cg><cy2>{target}</cy2>'), style=style_html)
+                    else:
+                        print_formatted_text(HTML(f'<cr>未找到目标：</cr><cy2>{target}</cy2>'), style=style_html)
+                except Exception as e:
+                    print_formatted_text(HTML(f'<cr>删除失败：{str(e)}</cr>'), style=style_html)
+
+            elif user_input.strip().startswith('cat '):
+                # 查看文件内容
+                filename = user_input.strip().split(' ', 1)[1]
+                try:
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
+                except Exception as e:
+                    print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
+
+            elif user_input.strip().startswith('mv '):
+                # 移动或重命名文件
+                parts = user_input.strip().split(' ')
+                if len(parts) == 3:
+                    src, dst = parts[1], parts[2]
+                    try:
+                        shutil.move(src, dst)
+                        print_formatted_text(HTML(f'<cg>已移动/重命名：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
+                    except Exception as e:
+                        print_formatted_text(HTML(f'<cr>操作失败：{str(e)}</cr>'), style=style_html)
+                else:
+                    print_formatted_text(HTML('<cr>用法错误：mv 源文件 目标文件</cr>'), style=style_html)
+
+            elif user_input.strip().startswith('cp '):
+                # 复制文件
+                parts = user_input.strip().split(' ')
+                if len(parts) == 3:
+                    src, dst = parts[1], parts[2]
+                    try:
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst)
+                        else:
+                            shutil.copy2(src, dst)
+                        print_formatted_text(HTML(f'<cg>已复制：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
+                    except Exception as e:
+                        print_formatted_text(HTML(f'<cr>复制失败：{str(e)}</cr>'), style=style_html)
+                else:
+                    print_formatted_text(HTML('<cr>用法错误：cp 源文件 目标文件</cr>'), style=style_html)
+
+            elif user_input.strip().startswith('cat '):
+                filename = user_input.strip().split(' ', 1)[1]
+                view_text_file(filename)
+
+
+            elif user_input.strip().startswith('vim '):
+                filename = user_input.strip().split(' ', 1)[1]
+                mini_vim(filename)
 
         except KeyboardInterrupt:
             print_formatted_text(HTML('<cr>操作已中断</cr>'), style=style_html)

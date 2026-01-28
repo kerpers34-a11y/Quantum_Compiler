@@ -35,28 +35,49 @@ class Parser:
     def program(self):
         """ 解析完整的程序，支持顺序执行、分支、循环 """
         program_node = ASTNode("Program", line=self.current_token[2], col=self.current_token[3])
+
         # 确保 XQI-BEGIN 只出现在第一行
         if self.current_token[0] == 'XQI_BEGIN':
             program_node.children.append(self.xqi_begin())
         else:
             raise SyntaxError(f"程序必须以 XQI-BEGIN 开始 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
-        # 检查 shot 是否在 XQI-BEGIN 的下一行
-        if self.current_token[0] == 'OPCODE' and self.current_token[1] == 'shot':
-            if self.current_token[2] != program_node.children[0].line + 1:
-                raise SyntaxError(f"shot 必须在 XQI-BEGIN 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-            program_node.children.append(self.instruction())
-        else:
-            raise SyntaxError(f"shot 必须在 XQI-BEGIN 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+        # 标记是否找到 shot 和 error
+        found_shot = False
+        found_error = False
 
-        # 检查 error 是否在 shot 的下一行
-        if self.current_token[0] == 'OPCODE' and self.current_token[1] == 'error':
-            if self.current_token[2] != program_node.children[1].line + 1:
-                raise SyntaxError(f"error 必须在 shot 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-            program_node.children.append(self.instruction())
-        else:
-            raise SyntaxError(f"error 必须在 shot 的下一行 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+        # 跳过空行，并检查 shot 和 error
+        while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
+            # 跳过空行
+            if self.current_token[0] == 'NEWLINE':
+                self.eat('NEWLINE')
+                continue
 
+            # 检查 shot 和 error，允许顺序无关
+            if self.current_token[0] == 'OPCODE':
+                if self.current_token[1] == 'shot' and not found_shot:
+                    # 记录 shot
+                    program_node.children.append(self.instruction())
+                    found_shot = True
+                elif self.current_token[1] == 'error' and not found_error:
+                    # 记录 error
+                    program_node.children.append(self.instruction())
+                    found_error = True
+                else:
+                    # 如果是其他操作码，继续解析
+                    program_node.children.append(self.instruction())
+
+            # 如果都找到了 shot 和 error，就可以跳出
+            if found_shot and found_error:
+                break
+
+        # 如果没有找到 shot 或 error，抛出错误
+        if not found_shot:
+            raise SyntaxError(f"程序缺少 'shot' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+        if not found_error:
+            raise SyntaxError(f"程序缺少 'error' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+
+        # 继续解析其他语句
         while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
             stmt = self.statement()
             if stmt:
@@ -66,11 +87,11 @@ class Parser:
                     if op in ('U3', 'CNOT'):
                         self.last_valid_opcode = op
                         self.last_opcode_line = stmt.line
-                    else:
-                        if stmt.type == "Instruction":
-                            op = stmt.children[0].value
-                            if op not in ('U3', 'CNOT') and stmt.line > self.last_opcode_line:
-                                self.last_valid_opcode = None
+                else:
+                    if stmt.type == "Instruction":
+                        op = stmt.children[0].value
+                        if op not in ('U3', 'CNOT') and stmt.line > self.last_opcode_line:
+                            self.last_valid_opcode = None
                 program_node.children.append(stmt)
 
         # 确保 XQI-END 只出现在最后一行

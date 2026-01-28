@@ -609,3 +609,66 @@ Label Number   Sequence   Label Symbol
 Label    0:        0        loop
 Label    1:        1        proc
 Label    2:        2        end
+
+
+Operate Instructions:
+XQI-BEGIN
+     1. shot  1024
+     2. error(1)
+     3. qreg q[2] ;
+     4. creg c[2] ;
+     5.  ;
+     6. reset  q[0]
+     7. reset  q[1]
+     8. MOV R[0],3.14159265
+     9. MOV R[2],0.5236
+     10. MOV R[3],1.570796325
+     11. MOV R[4],4.712388975
+     12. MOV R[10],0.00
+     13. MOV R[11],0.00
+     14. MOV R[12],0.0
+     15. MOV R[15],5 ;
+     16. MOV R[14],1
+     17.  ;
+     18. BL proc
+     19. debug
+     20. SUB R[15],R[15],R[14]
+     21. BNE loop
+     22. B end
+     23. CNOT q[1],q[0]
+     24. U3(R[2],R[3],R[4]) q[0]
+     25. CNOT q[1],q[0]
+     26. U3(5.7595853,1.570796325,4.712388975) q[0]
+     27. U3(2.0944,1.570796325,4.712388975) q[0]
+     28. U3(0.0,1.570796325,1.570796325) q[0]
+     29. U3(4.1887853,1.570796325,4.712388975) q[0]
+     30. CNOT q[1],q[0]
+     31. U3(5.7595853,1.570796325,4.712388975) q[0]
+     32. CNOT q[1],q[0]
+     33. U3(0.5236,1.570796325,4.712388975) q[0]
+     34.  ;
+     35. CNOT q[1],q[0]
+     36. CNOT q[0],q[1]
+     37. CNOT q[1],q[0]
+     38. MOV PC,LR
+     39. measure q[0]->c[0]
+     40.  ;
+     41. measure q[1]->c[1]
+     42. MOV PC,0
+XQI-END
+
+Label Number   Sequence   Label Symbol
+Label    0:        0        loop
+Label    1:        1        proc
+Label    2:        2        end
+
+
+Operate Instructions:
+XQI-BEGIN
+     1.  ;
+XQI-END
+
+
+Operate Instructions:
+XQI-BEGIN
+XQI-END
