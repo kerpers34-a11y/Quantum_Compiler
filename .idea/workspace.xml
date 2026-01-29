@@ -5,10 +5,22 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="95987af2-a4c7-42b6-a4de-044c02cc97b0" name="更改" comment="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <change afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/parser.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xqi_shell/style.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi_shell/style.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ascii_art.db" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/ascii_art.db" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/evaluator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/parser.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/textprocessing_funs.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_lexer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_shell/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_shell/auto_suggest.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_shell/custom_lexer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_shell/style.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi_shell/word_completer.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -68,6 +80,11 @@
     &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\kerpe\PycharmProjects\Quantum_Complier\xqi" />
+    </key>
+  </component>
   <component name="RunManager" selected="Python.main">
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="Quantum_Complier" />
@@ -344,7 +361,15 @@
       <option name="project" value="LOCAL" />
       <updated>1742752839234</updated>
     </task>
-    <option name="localTasksCounter" value="27" />
+    <task id="LOCAL-00027" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1769593265622</created>
+      <option name="number" value="00027" />
+      <option name="presentableId" value="LOCAL-00027" />
+      <option name="project" value="LOCAL" />
+      <updated>1769593265622</updated>
+    </task>
+    <option name="localTasksCounter" value="28" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
