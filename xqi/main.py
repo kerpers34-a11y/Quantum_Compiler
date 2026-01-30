@@ -282,7 +282,6 @@ def main():
                     print_formatted_text(HTML(f'<cg>已加载文件：</cg><ivory>{user_input[0:]}</ivory>'), style=style_html)
                     print_formatted_text(HTML(f'<cg>等待执行...</cg>'), style=style_html)
                     main_progress(user_input)
-                    print('4')
 
             elif '\n' in user_input:
                 filename = f"XQI_PASTED_{time.strftime('%Y%m%d_%H%M%S')}.XQIASM"

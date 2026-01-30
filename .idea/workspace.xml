@@ -5,7 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="95987af2-a4c7-42b6-a4de-044c02cc97b0" name="更改" comment="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <change afterPath="$PROJECT_DIR$/tests/test_evaluator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/XQI-QC-Density-Matrix-list.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/XQI-QC-Density-Matrix-state.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/XQI-QC-list.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi.egg-info/SOURCES.txt" beforeDir="false" afterPath="$PROJECT_DIR$/xqi.egg-info/SOURCES.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -362,7 +368,23 @@
       <option name="project" value="LOCAL" />
       <updated>1769691699392</updated>
     </task>
-    <option name="localTasksCounter" value="29" />
+    <task id="LOCAL-00029" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1769751594086</created>
+      <option name="number" value="00029" />
+      <option name="presentableId" value="LOCAL-00029" />
+      <option name="project" value="LOCAL" />
+      <updated>1769751594086</updated>
+    </task>
+    <task id="LOCAL-00030" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1769751601554</created>
+      <option name="number" value="00030" />
+      <option name="presentableId" value="LOCAL-00030" />
+      <option name="project" value="LOCAL" />
+      <updated>1769751601554</updated>
+    </task>
+    <option name="localTasksCounter" value="31" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

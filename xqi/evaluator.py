@@ -450,7 +450,13 @@ class Evaluator:
             if node.type == 'Opcode' and node.value in branch_ops:
                 pass  # 分支指令已显式设置PC
             else:
-                self.env.pc += 1  # 非分支指令自动递增
+                auto_increment_ops = {
+                    'MOV', 'ADD', 'SUB', 'MUL', 'DIV',
+                    'U3', 'CNOT', 'reset', 'measure', 'debug', 'barrier'
+                }
+
+                if opcode in auto_increment_ops:
+                    self.env.pc += 1
 
     @staticmethod
     def _get_affected_qubits(node):
