@@ -1,0 +1,2 @@
+[console_scripts]
+xqishell = xqi.main:main

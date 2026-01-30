@@ -1,0 +1,8 @@
+markdown-it-py<4.0,>=3.0
+mdurl<1.0,>=0.1
+numpy<3.0,>=2.1
+prompt_toolkit<4.0,>=3.0
+pyvim<4.0,>=3.0
+Pygments<3.0,>=2.18
+scipy<2.0,>=1.14
+wcwidth<1.0,>=0.2

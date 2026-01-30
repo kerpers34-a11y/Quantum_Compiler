@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: xqi
+Version: 0.1.0
+Summary: Quantum Computing Compiler and Simulator
+Author: Your Name
+Author-email: Your Name <you@example.com>
+Requires-Python: >=3.11
+Requires-Dist: markdown-it-py<4.0,>=3.0
+Requires-Dist: mdurl<1.0,>=0.1
+Requires-Dist: numpy<3.0,>=2.1
+Requires-Dist: prompt_toolkit<4.0,>=3.0
+Requires-Dist: pyvim<4.0,>=3.0
+Requires-Dist: Pygments<3.0,>=2.18
+Requires-Dist: scipy<2.0,>=1.14
+Requires-Dist: wcwidth<1.0,>=0.2
+Dynamic: author
+Dynamic: requires-python
