@@ -210,12 +210,12 @@ class Parser:
                     f"语法错误: shot 后面必须且仅能接一个正整数 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
             node.children = [opcode_node, operands_node]
         elif opcode_node.value == "error":
-            # 解析 error 操作数
             operands_node = self.operand_list()
             if not self.validate_error_operands(operands_node.children):
-                 raise SyntaxError(
-                    f"语法错误: error 操作数格式不正确 ({operands_node.children}行 {self.current_token[2]}, 列 {self.current_token[3]})")
+                # validate 函数内部已经 raise，这里不会执行到
+                pass
             node.children = [opcode_node, operands_node]
+            self.eat('ASSIGN')
         elif opcode_node.value == "U3":
             operands_node = self.operand_list()
             self.validate_u3_operands(operands_node.children)
@@ -483,66 +483,24 @@ class Parser:
 
     @staticmethod
     def validate_error_operands(operands):
-        """ 验证 error 指令操作数 (新AST结构版本) """
+        """ 只做最基本检查，数量 1~4，第一个是整数，其余可转为 float """
+        if not (1 <= len(operands) <= 4):
+            raise SyntaxError(f"error 需要 1~4 个参数，实际 {len(operands)} 个")
 
-        # 参数结构说明：error num1 [,num2] [,num3] [,num4]
+        # 第一个必须是 0~9 的整数（error type）
+        try:
+            etype = int(operands[0].value)
+            if not 0 <= etype <= 9:
+                raise ValueError
+        except:
+            raise SyntaxError(f"error 第一个参数必须是 0~9 的整数，收到 '{operands[0].value}'")
 
-        def validate_value(position, value, checker, err_msg):
-            """ 通用参数验证 """
-            if not checker(value):
-                line = operands[position].line
-                col = operands[position].col
-                raise SyntaxError(f"参数{position + 1}错误: {err_msg} (行 {line}, 列 {col})")
-
-        # 检查操作数数量
-        if len(operands) < 1 or len(operands) > 4:
-            first_line = operands[0].line if operands else 0
-            first_col = operands[0].col if operands else 0
-            raise SyntaxError(f"error指令需要1-4个参数，当前参数数 {len(operands)} (行 {first_line}, 列 {first_col})")
-
-        # 参数类型验证
-        for idx, op in enumerate(operands):
-            if not (isinstance(op, ASTNode) and op.type == "Operand"):
-                line = op.line if isinstance(op, ASTNode) else "未知"
-                col = op.col if isinstance(op, ASTNode) else "未知"
-                raise SyntaxError(f"参数{idx + 1}必须是有效操作数 (行 {line}, 列 {col})")
-
-        values = [op.value for op in operands]
-
-        # 参数1验证 (错误模型类型)
-        validate_value(0, values[0],
-                       lambda v: v in {'0', '1'},
-                       "必须为0(无误差)或1(允许误差)")
-
-        # 参数2验证 (错误子类型)
-        if len(values) >= 2:
-            validate_value(1, values[1],
-                           lambda v: v.isdigit() and 0 <= int(v) <= 9,
-                           "必须为0-9的整数")
-
-        # 参数3验证 (错误概率)
-        if len(values) >= 3:
+        # 后续参数尝试转为 float（概率或代码）
+        for i, op in enumerate(operands[1:], start=2):
             try:
-                prob = float(values[2])
-                validate_value(2, values[2],
-                               lambda v: 0 <= prob <= 1,
-                               "必须为0.0到1.0之间的浮点数")
-            except ValueError:
-                line = operands[2].line
-                col = operands[2].col
-                raise SyntaxError(f"参数3格式错误: 无法转换为浮点数 '{values[2]}' (行 {line}, 列 {col})")
-
-        # 参数4验证 (传播概率)
-        if len(values) >= 4:
-            try:
-                prop = float(values[3])
-                validate_value(3, values[3],
-                               lambda v: 0 <= prop <= 1,
-                               "必须为0.0到1.0之间的浮点数")
-            except ValueError:
-                line = operands[3].line
-                col = operands[3].col
-                raise SyntaxError(f"参数4格式错误: 无法转换为浮点数 '{values[3]}' (行 {line}, 列 {col})")
+                float(op.value)
+            except:
+                raise SyntaxError(f"error 第 {i} 个参数应为数字，收到 '{op.value}'")
 
         return True
 

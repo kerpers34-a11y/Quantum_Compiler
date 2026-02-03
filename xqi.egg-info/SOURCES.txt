@@ -1,6 +1,6 @@
 pyproject.toml
 setup.py
-tests/test_evaluator.py
+tests/test_cnot.py
 xqi/__init__.py
 xqi/ascii_art.db
 xqi/auto_suggest.py
