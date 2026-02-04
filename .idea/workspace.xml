@@ -5,15 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="95987af2-a4c7-42b6-a4de-044c02cc97b0" name="更改" comment="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
-      <change afterPath="$PROJECT_DIR$/tests/test_cnot.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_evaluator.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/xqi.egg-info/SOURCES.txt" beforeDir="false" afterPath="$PROJECT_DIR$/xqi.egg-info/SOURCES.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xqi/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/evaluator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xqi/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xqi/parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/parser.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -41,12 +36,12 @@
     &quot;assignee&quot;: &quot;OttyAI&quot;
   }
 }</component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "git@github.com:kerpers34-a11y/Quantum_Compiler.git",
-    "accountId": "906b6e8e-d0da-4593-8723-58b9859111a1"
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;git@github.com:kerpers34-a11y/Quantum_Compiler.git&quot;,
+    &quot;accountId&quot;: &quot;906b6e8e-d0da-4593-8723-58b9859111a1&quot;
   }
-}]]></component>
+}</component>
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/xqi/evaluator.py" root0="FORCE_HIGHLIGHTING" />
   </component>
@@ -397,7 +392,15 @@
       <option name="project" value="LOCAL" />
       <updated>1769761109323</updated>
     </task>
-    <option name="localTasksCounter" value="32" />
+    <task id="LOCAL-00032" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1770128673533</created>
+      <option name="number" value="00032" />
+      <option name="presentableId" value="LOCAL-00032" />
+      <option name="project" value="LOCAL" />
+      <updated>1770128673533</updated>
+    </task>
+    <option name="localTasksCounter" value="33" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
