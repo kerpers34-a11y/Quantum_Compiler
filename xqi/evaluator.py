@@ -28,55 +28,61 @@ class InstructionError(ValueError):
 
 class QuantumEnvironment:
     def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_Register,
-                 max_memory=config.MAX_Memory, simulation_mode='statevector'):
-        # 参数校验
-        self.initial_quantum_state = None
-        if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
-            raise ValueError("Register sizes must be non-negative integers")
+                 max_memory=config.MAX_Memory):
         self.qreg_size = qreg_size
         self.creg_size = creg_size
-        self.simulation_mode = simulation_mode.lower()
         self.max_registers = max_registers
         self.max_memory = max_memory
-        # 初始化量子寄存器大小和经典寄存器大小
-        self._initial_qreg_size = qreg_size
-        self._initial_creg_size = creg_size
-        # 初始化量子态
-        self.quantum_state = []
-        self._reset_quantum_register(qreg_size)  # 调用内部重置方法
-        # 初始化经典寄存器（兼容复数测量结果）
-        self._initial_creg = np.zeros(creg_size, dtype=np.complex128)
-        self.creg = self._initial_creg.copy()
-        # 初始化通用寄存器和存储
+
+        # 同时初始化两个状态
+        self.state_sv = None  # Statevector
+        self.state_dm = None  # Density Matrix
+        self._reset_quantum_registers(qreg_size)
+
+        self.creg = np.zeros(creg_size, dtype=np.complex128)
         self.registers = np.zeros(max_registers, dtype=np.float64)
         self.memory = np.zeros(max_memory, dtype=np.float64)
-        # 控制寄存器
-        self.pc = 0  # 程序计数器
-        self.lr = 0  # 链接寄存器
-        self.SF = 0  # 符号标志（负数）
-        self.ZF = 0  # 零标志
+
+        self.pc = 0
+        self.lr = 0
+        self.SF = 0
+        self.ZF = 0
+        self.shot_completed = False
+
         # 错误模型
-        self.error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
+        self.error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability,
+                            config.default_Q2_error_Probability, config.default_measure_error_Probability,
+                            config.default_reset_error_Probability)
         self._pending_error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
 
-    def _reset_quantum_register(self, new_size):
-        """重置量子寄存器"""
-        self.qreg_size = new_size
-        self.initial_quantum_state = self._initialize_quantum_state(new_size)
-        self.quantum_state = self.initial_quantum_state.copy()
+    def _reset_quantum_registers(self, size):
+        self.qreg_size = size
+        dim = 2 ** size if size > 0 else 1
+        # 初始化态矢量 |0...0>
+        self.state_sv = np.zeros(dim, dtype=np.complex128)
+        self.state_sv[0] = 1.0
+        # 初始化密度矩阵 |0...0><0...0|
+        self.state_dm = np.zeros((dim, dim), dtype=np.complex128)
+        self.state_dm[0, 0] = 1.0
 
     def resize_qreg(self, new_size):
-        """在 qreg 声明时调用：改变寄存器大小并初始化"""
-        if not isinstance(new_size, int) or new_size < 0:
-            raise ValueError("qreg_size must be non-negative integer")
+        self._reset_quantum_registers(new_size)
 
-        self.qreg_size = new_size
-        self.initial_quantum_state = self._initialize_quantum_state(new_size)
-        self.quantum_state = self.initial_quantum_state.copy()
+    def reset_for_shot(self):
+        self._reset_quantum_registers(self.qreg_size)
+        self.creg.fill(0)
+        self.pc = 0
+        self.lr = 0
+        self.SF = 0
+        self.ZF = 0
+        self.shot_completed = False
 
-        if hasattr(self, '_pending_error_model'):
-            self.error_model = self._pending_error_model
-            del self._pending_error_model
+    def apply_unitary(self, u_matrix):
+        """同步更新态矢量和密度矩阵"""
+        # 更新态矢量: |ψ> = U|ψ>
+        self.state_sv = u_matrix @ self.state_sv
+        # 更新密度矩阵: ρ = UρU†
+        self.state_dm = u_matrix @ self.state_dm @ u_matrix.conj().T
 
     def reset_quantum_state(self, qubits=None):
         """
@@ -134,15 +140,6 @@ class QuantumEnvironment:
         else:
             raise ValueError(f"Unsupported simulation mode: {self.simulation_mode}")
         return state
-
-    def reset_for_shot(self):
-        """重置量子及CPSR环境到初始状态"""
-        self.quantum_state = self.initial_quantum_state.copy()
-        self.creg = self._initial_creg.copy()
-        self.pc = 0
-        self.lr = 0
-        self.SF = 0  # 符号标志（负数）
-        self.ZF = 0  # 零标志
 
     def full_reset(self):
         """完全重置所有状态（用于环境初始化）"""
@@ -265,41 +262,32 @@ class QuantumEnvironment:
         return operators
 
     def get_full_operator(self, op, target_qubit):
-        """将单比特算符扩展到全系统空间，匹配 C 语言的高位在左原则"""
-        # C 语言逻辑：q[n-1] ⊗ q[n-2] ⊗ ... ⊗ q[0]
-        # 对应 Python：从最高索引开始 kron
+        """构建全系统算符 (MSB-first)"""
         full_op = np.array([[1.0]], dtype=np.complex128)
-        for i in range(self.qreg_size - 1, -1, -1):  # 从高位到低位
+        for i in range(self.qreg_size - 1, -1, -1):
             if i == target_qubit:
                 full_op = np.kron(full_op, op)
             else:
                 full_op = np.kron(full_op, np.eye(2, dtype=np.complex128))
         return full_op
 
-    def apply_unitary(self, u_matrix):
-        """执行密度矩阵变换: ρ = U * ρ * U†"""
-        self.simulation_mode = 'density_matrix'  # 强制进入密度矩阵模式
-        self.quantum_state = u_matrix @ self.quantum_state @ u_matrix.conj().T
 
     def apply_depolarizing_error(self, qubit, p):
-        """严格匹配 C 语言 operation_Density_Matrix_ERROR 代码"""
+        """仅作用于密度矩阵 (噪声不影响理想态矢量)"""
         if p <= 0: return
-
         X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
         Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
         Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
 
-        # 计算四个分量: (1-p)ρ + (p/3)(XρX + YρY + ZρZ)
-        # 获取全系统空间的 Pauli 算符
-        full_X = self.get_full_operator(X, qubit)
-        full_Y = self.get_full_operator(Y, qubit)
-        full_Z = self.get_full_operator(Z, qubit)
+        fX = self.get_full_operator(X, qubit)
+        fY = self.get_full_operator(Y, qubit)
+        fZ = self.get_full_operator(Z, qubit)
 
-        rho = self.quantum_state
-        self.quantum_state = (1 - p) * rho + (p / 3.0) * (
-                full_X @ rho @ full_X.conj().T +
-                full_Y @ rho @ full_Y.conj().T +
-                full_Z @ rho @ full_Z.conj().T
+        rho = self.state_dm
+        self.state_dm = (1 - p) * rho + (p / 3.0) * (
+                fX @ rho @ fX.conj().T +
+                fY @ rho @ fY.conj().T +
+                fZ @ rho @ fZ.conj().T
         )
 
     @staticmethod
@@ -350,105 +338,71 @@ class QuantumEnvironment:
             )
 
     def apply_physical_reset(self, target_qubit, p_reset):
-        """
-        严格对齐 C 语言的 operation_Density_Matrix_reset
-        target_qubit: 目标比特索引
-        p_reset: 重置错误率 (对应 C 语言中的 Q1_error_Probability)
-        """
-        self.convert_to_density()
+        """物理重置：密度矩阵应用噪声，态矢量直接强制归零"""
+        # 1. 态矢量处理 (理想化重置)
         dim = 2 ** self.qreg_size
+        new_sv = np.zeros_like(self.state_sv)
+        for i in range(dim):
+            if ((i >> target_qubit) & 1) == 0:
+                # 寻找对应的 |...1...> 状态并加到 |...0...> 上实现重置效果
+                corr_idx = i | (1 << target_qubit)
+                # 简化处理：态矢量重置通常涉及非么正塌缩，这里强制映射
+                # 实际仿真中，SV重置常直接设为基态或抛弃分支
+                pass
+                # 简单的SV重置策略：强制该位为0并重新归一化
+        mask = ~((np.arange(dim) >> target_qubit) & 1).astype(bool)
+        self.state_sv[~mask] = 0
+        norm = np.linalg.norm(self.state_sv)
+        if norm > 1e-10:
+            self.state_sv /= norm
+        else:
+            self.state_sv[0] = 1.0
 
-        # 1. 构造 C 语言中的投影/偏迹算符 (基于单比特)
-        # bra0 = [1, 0], bra1 = [0, 1]
+        # 2. 密度矩阵处理 (带噪声)
         m0 = np.array([[1, 0]], dtype=np.complex128)
         m1 = np.array([[0, 1]], dtype=np.complex128)
 
-        # 2. 构造全系统的偏迹算符
-        # 这里的逻辑是：Tr_i(rho) = M0_i rho M0_i^† + M1_i rho M1_i^†
-        # 我们需要构造维度为 (dim/2, dim) 的算符
         def build_trace_op(op_single):
             full_op = np.array([[1.0]], dtype=np.complex128)
             for i in range(self.qreg_size - 1, -1, -1):
-                if i == target_qubit:
-                    full_op = np.kron(full_op, op_single)
-                else:
-                    full_op = np.kron(full_op, np.eye(2))
+                full_op = np.kron(full_op, op_single if i == target_qubit else np.eye(2))
             return full_op
 
-        full_m0 = build_trace_op(m0)
-        full_m1 = build_trace_op(m1)
+        fm0, fm1 = build_trace_op(m0), build_trace_op(m1)
+        rho_reduced = fm0 @ self.state_dm @ fm0.conj().T + fm1 @ self.state_dm @ fm1.conj().T
 
-        # 计算偏迹后的状态 (维度变为 dim/2 x dim/2)
-        rho_reduced = full_m0 @ self.quantum_state @ full_m0.conj().T + \
-                      full_m1 @ self.quantum_state @ full_m1.conj().T
-
-        # 3. 构造 C 语言中的 reset_0_operator_matrix (带有噪声的注入态)
-        # C 语言公式:
-        # [ 1-p,  sqrt((1-p)p) ]
-        # [ sqrt(p(1-p)), p    ]
         r_matrix = np.array([
             [1.0 - p_reset, np.sqrt((1.0 - p_reset) * p_reset)],
             [np.sqrt(p_reset * (1.0 - p_reset)), p_reset]
         ], dtype=np.complex128)
 
-        # 4. 重新合成全系统密度矩阵 (维度回到 dim x dim)
-        # 注意：C 语言是用 Kronecker_Product(trace_state, reset_0)
-        # 这里的顺序必须严格匹配 C 语言的 Endianness
-        new_rho = np.array([[1.0]], dtype=np.complex128)
-        # 按照 C 语言的逻辑，reset 的比特被放回到了 target_qubit 的位置
-        # 我们采用分步重组的方式：
-
-        # 简单的实现方式是：构造一个注入算符，将 |0> 态放回 target_qubit
-        # 这里直接按照 C 的思路：将 reduced_rho 与 r_matrix 重新张量积
-        # 实际上 C 语言通过多次 SWAP 确保了重置比特在 LSB，所以我们也这样做：
-
-        # 更加通用的物理重置公式 (等效于 C 语言的 SWAP+Trace+Insert):
-        # rho = rho_reduced \otimes R_at_target
-        # 这里我们使用 Kraus 形式来表达这个过程，更不容易出错：
-        # K0 = |0_err><0|, K1 = |0_err><1|
-
-        # 构造带有噪声的 |0> 态矢量 (对应 C 语言 reset_0_operator)
-        # 注意：C 语言这里的 reset_0_operator 实际上是一个密度矩阵算子
-
-        # 我们直接手动重组：
-        self.quantum_state = self._reinsert_qubit(rho_reduced, r_matrix, target_qubit)
+        self.state_dm = self._reinsert_qubit(rho_reduced, r_matrix, target_qubit)
 
     def _reinsert_qubit(self, rho_reduced, r_matrix, target_qubit):
-        """辅助函数：将缩减后的密度矩阵与新比特矩阵在指定位置重新合并"""
         dim_reduced = 2 ** (self.qreg_size - 1)
-        # 构造一个新的 dim x dim 矩阵
         new_rho = np.zeros((dim_reduced * 2, dim_reduced * 2), dtype=np.complex128)
-
-        # 遍历所有基矢，将新比特插入到 target_qubit 位置
         for i in range(dim_reduced):
             for j in range(dim_reduced):
                 val = rho_reduced[i, j]
                 if abs(val) < 1e-15: continue
-
-                # 将原始索引 i 拆开，在 target_qubit 处插入空位
-                # 例如 qreg=3, target=1: i=10 (binary) -> 1_0 (inserted) -> 100, 101, 110, 111...
                 def insert_bit(idx, bit):
                     mask = (1 << target_qubit) - 1
                     return ((idx & ~mask) << 1) | (bit << target_qubit) | (idx & mask)
-
-                for b1 in [0, 1]:
-                    for b2 in [0, 1]:
-                        row = insert_bit(i, b1)
-                        col = insert_bit(j, b2)
-                        # r_matrix 提供了新比特在该位置的密度矩阵分布
-                        new_rho[row, col] = val * r_matrix[b1, b2]
+                for b1, b2 in product([0, 1], [0, 1]):
+                    new_rho[insert_bit(i, b1), insert_bit(j, b2)] = val * r_matrix[b1, b2]
         return new_rho
 
 class Evaluator:
     np.random.seed()
     def __init__(self, env, parser, ast):
-        self.shot_idx = None
         self.env = env
-        self.labels = {}
+        self.parser = parser
+        self.ast = ast
+        self.labels = collect_labels(self, ast)
         self.body_instructions = []
+        self.shot_idx = 0
         self.source_code_text = parser.get_source_code_text(ast)
         self.labels_info = parser.get_labels_info(ast)
-        self.parser = parser
 
     def evaluate(self, ast):
         self.env.full_reset()
