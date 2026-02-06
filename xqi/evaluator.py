@@ -18,7 +18,7 @@ def collect_labels(self, ast):  # Add self
     for node in ast.children:
         if node.type == 'Label':
             labels[node.value] = pc
-        elif node.type == 'Instruction' and node.children[0].value not in {'qreg', 'creg', 'error', 'XQI-BEGIN', 'XQI-END'}:
+        elif node.type == 'Instruction' and node.children[0].value not in {'shot', 'qreg', 'creg', 'error', 'XQI-BEGIN', 'XQI-END'}:
             pc += 1  # Only count body instructions
     return labels
 
@@ -56,7 +56,8 @@ class QuantumEnvironment:
         self.SF = 0  # 符号标志（负数）
         self.ZF = 0  # 零标志
         # 错误模型
-        self.error_model = None
+        self.error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
+        self._pending_error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
 
     def _reset_quantum_register(self, new_size):
         """重置量子寄存器"""
@@ -122,10 +123,6 @@ class QuantumEnvironment:
                         rho[0, 0] = 1.0
                 self.quantum_state = rho
 
-        # reset 后通常也会施加噪声（如果模型要求）
-        if self.error_model:
-            self.apply_quantum_noise(qubits or list(range(self.qreg_size)))
-
     def _initialize_quantum_state(self, size):
         dim = 2 ** size if size > 0 else 1  # Treat size=0 as dim=1
         if self.simulation_mode == 'statevector':
@@ -176,21 +173,28 @@ class QuantumEnvironment:
         self.pc = 0
         self.lr = 0
 
+    def convert_to_density(self):
+        if self.simulation_mode == 'statevector':
+            self.quantum_state = np.outer(self.quantum_state, self.quantum_state.conj())
+            self.simulation_mode = 'density_matrix'
+
     def apply_quantum_noise(self, qubits):
         """应用当前配置的量子噪声"""
         if self.qreg_size == 0 or not qubits:  # Early return for trivial cases
             return
         print(f"Applying noise to qubits {qubits} with model {self.error_model}")
-        if not self.error_model and hasattr(self, '_pending_error_model'):
+        if not self.error_model:
+            return
+        if hasattr(self, '_pending_error_model'):
             self.error_model = self._pending_error_model
             print(f"Applying delayed error model at first noise application: {self._pending_error_model}")
             del self._pending_error_model
-        if not self.error_model or self.error_model[0] == 9:
-            return  # 测量错误单独处理
-        noise_type, *params = self.error_model
-        kraus_ops = self.generate_kraus_operators(noise_type, qubits, params)
+        noise_type, p1, p2, p_measure, p_reset = self.error_model
+        p = p1 if len(qubits) == 1 else p2
+        kraus_ops = self.generate_kraus_operators(noise_type, qubits, [p])
         if any(not isinstance(k, np.ndarray) for k in kraus_ops):
             raise TypeError("Kraus operators must be numpy arrays")
+        self.convert_to_density()
         # 应用完整噪声通道：sum K rho K†
         new_rho = np.zeros_like(self.quantum_state, dtype=np.complex128)
         for k in kraus_ops:
@@ -209,113 +213,94 @@ class QuantumEnvironment:
         assert isinstance(self.quantum_state, np.ndarray), \
             f"quantum_state corrupted: {type(self.quantum_state)}"
 
-    def generate_kraus_operators(self, noise_type, qubits, params):
-        """生成对应噪声模型的Kraus算子"""
+    def generate_bit_flip_kraus(self, p, qubits):
+        per_qubit_ops = []
+        for q in qubits:
+            k0 = np.sqrt(1 - p) * np.eye(2, dtype=np.complex128)
+            k1 = np.sqrt(p) * np.array([[0, 1], [1, 0]], dtype=np.complex128)
+            per_qubit_ops.append([k0, k1])
         operators = []
-        # 确保 qubits 是一个列表（即使只有一个量子位）
-        if not isinstance(qubits, list):
-            qubits = [qubits]
-        if self.qreg_size == 0:
-            return [np.eye(1, dtype=np.complex128)]
-        # 解极化噪声 (类型1) - 修改为联合（全局）模式
-        if noise_type == 1:
-            p = params[0] if params else config.default_Q1_error_Probability
-            k = len(qubits)
-            if k == 0:
-                return [np.eye(1, dtype=np.complex128)]
-            num_paulis = 4 ** k  # d^2 where d = 2^k
-            sqrt_depol = np.sqrt(p / num_paulis)
-            sqrt_id = np.sqrt(1 - p + p / num_paulis)
-            basis = [
-                np.eye(2),
-                np.array([[0, 1], [1, 0]]),
-                np.array([[0, -1j], [1j, 0]]),
-                np.array([[1, 0], [0, -1]])
-            ]
-            # 生成所有Pauli组合（无系数）
-            per_qubit_basis = [basis for _ in qubits]
-            for combo in product(*per_qubit_basis):
-                # 检查是否为全I
-                is_identity = all(np.array_equal(m, basis[0]) for m in combo)
-                coeff = sqrt_id if is_identity else sqrt_depol
-                op_list = [np.eye(2) for _ in range(self.qreg_size)]
-                for q, pauli in zip(qubits, combo):
-                    op_list[q] = pauli
-                full_op = np.eye(1, dtype=np.complex128)
-                for q_idx in reversed(range(self.qreg_size)):
-                    full_op = np.kron(full_op, op_list[q_idx])
-                full_op *= coeff  # 应用系数
-                operators.append(full_op)
-            print(f"generating {len(operators)} kraus ops for {k} qubits")
-        # 幅度阻尼 (类型2)
-        elif noise_type == 2:
-            gamma = params[0] if params else config.default_amp_damping_gamma
-            per_qubit_ops = []
-            for q in qubits:
-                k0 = np.array([[1, 0],
-                               [0, np.sqrt(1 - gamma)]], dtype=np.complex128)
-                k1 = np.array([[0, np.sqrt(gamma)],
-                               [0, 0]], dtype=np.complex128)
-                per_qubit_ops.append([k0, k1])
-            # 生成所有可能的算子组合
-            for combo in product(*per_qubit_ops):
-                # 初始化操作列表（按qreg_size顺序）
-                op_list = [np.eye(2) for _ in range(self.qreg_size)]
-                # 填充当前组合的算子
-                for q, op in zip(qubits, combo):
-                    op_list[q] = op
-                # 构建全系统算子
-                full_op = np.eye(1, dtype=np.complex128)
-                for q_idx in reversed(range(self.qreg_size)):
-                    full_op = np.kron(full_op, op_list[q_idx])
-                operators.append(full_op)
-        # 相位阻尼 (类型3)
-        elif noise_type == 3:
-            gamma = params[0] if params else config.default_phase_damping_gamma
-            per_qubit_ops = []
-            for q in qubits:
-                k0 = np.array([[1, 0],
-                               [0, np.sqrt(1 - gamma)]], dtype=np.complex128)
-                k1 = np.array([[0, 0],
-                               [0, np.sqrt(gamma)]], dtype=np.complex128)
-                per_qubit_ops.append([k0, k1])
-            for combo in product(*per_qubit_ops):
-                op_list = [np.eye(2) for _ in range(self.qreg_size)]
-                for q, op in zip(qubits, combo):
-                    op_list[q] = op
-                # 张量积构建
-                full_op = np.eye(1, dtype=np.complex128)
-                for q_idx in reversed(range(self.qreg_size)):
-                    full_op = np.kron(full_op, op_list[q_idx])
-                operators.append(full_op)
-        # 重置误差 (类型8)
-        elif noise_type == 8:
-            p = params[0] if params else config.default_reset_error_Probability
-            per_qubit_ops = []
-            for q in qubits:
-                # 重置到|0>和|1>的概率
-                k0 = np.sqrt(1 - p) * np.eye(2)
-                k1 = np.sqrt(p) * np.array([[1, 1], [0, 0]])  # 重置到|0>
-                k2 = np.sqrt(p) * np.array([[0, 0], [1, 1]])  # 重置到|1>
-                per_qubit_ops.append([k0, k1, k2])
-            for combo in product(*per_qubit_ops):
-                op_list = [np.eye(2) for _ in range(self.qreg_size)]
-                for q, op in zip(qubits, combo):
-                    op_list[q] = op
-                # 逆序构建张量积
-                full_op = np.eye(1, dtype=np.complex128)
-                for q_idx in reversed(range(self.qreg_size)):
-                    full_op = np.kron(full_op, op_list[q_idx])
-                operators.append(full_op)
-        else:
-            raise ValueError(f"Unsupported noise type: {noise_type}")
-        self.validate_kraus_ops(operators)
-        operators = [np.asarray(op, dtype=np.complex128) for op in operators]
-        for i, op in enumerate(operators):
-            if op.ndim != 2 or op.shape[0] != op.shape[1]:
-                raise ValueError(f"Kraus operator {i} has invalid shape {op.shape}")
-        self.validate_kraus_ops(operators)
+        for combo in product(*per_qubit_ops):
+            op_list = [np.eye(2) for _ in range(self.qreg_size)]
+            for q, op in zip(qubits, combo):
+                op_list[q] = op
+            full_op = np.eye(1, dtype=np.complex128)
+            for q_idx in reversed(range(self.qreg_size)):
+                full_op = np.kron(full_op, op_list[q_idx])
+            operators.append(full_op)
         return operators
+
+    def generate_kraus_operators(self, noise_type, qubit_idx, params):
+        p = params[0]
+        I = np.eye(2, dtype=np.complex128)
+        X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
+        Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
+
+        raw_ops = []
+        if noise_type == 1:  # Depolarizing
+            raw_ops = [(np.sqrt(1 - p), I), (np.sqrt(p / 3), X), (np.sqrt(p / 3), Y), (np.sqrt(p / 3), Z)]
+        elif noise_type == 2:  # Amplitude Damping
+            k0 = np.array([[1, 0], [0, np.sqrt(1 - p)]], dtype=np.complex128)
+            k1 = np.array([[0, np.sqrt(p)], [0, 0]], dtype=np.complex128)
+            raw_ops = [(1.0, k0), (1.0, k1)]
+        elif noise_type == 3:  # Phase Damping
+            k0 = np.sqrt(1 - p) * I
+            k1 = np.sqrt(p) * np.array([[1, 0], [0, 0]], dtype=np.complex128)
+            k2 = np.sqrt(p) * np.array([[0, 0], [0, 1]], dtype=np.complex128)
+            raw_ops = [(1.0, k0), (1.0, k1), (1.0, k2)]
+        else:
+            raw_ops = [(1.0, I)]  # Default Identity
+
+        # 提升到全系统空间
+        operators = []
+        for coeff, m in raw_ops:
+            full_op = np.eye(1, dtype=np.complex128)
+            for q in reversed(range(self.qreg_size)):
+                if q == qubit_idx:
+                    full_op = np.kron(full_op, m)
+                else:
+                    full_op = np.kron(full_op, np.eye(2))
+            operators.append(full_op * coeff)
+        return operators
+
+    def get_full_operator(self, op, target_qubit):
+        """将单比特算符扩展到全系统空间，匹配 C 语言的高位在左原则"""
+        # C 语言逻辑：q[n-1] ⊗ q[n-2] ⊗ ... ⊗ q[0]
+        # 对应 Python：从最高索引开始 kron
+        full_op = np.array([[1.0]], dtype=np.complex128)
+        for i in range(self.qreg_size - 1, -1, -1):  # 从高位到低位
+            if i == target_qubit:
+                full_op = np.kron(full_op, op)
+            else:
+                full_op = np.kron(full_op, np.eye(2, dtype=np.complex128))
+        return full_op
+
+    def apply_unitary(self, u_matrix):
+        """执行密度矩阵变换: ρ = U * ρ * U†"""
+        self.simulation_mode = 'density_matrix'  # 强制进入密度矩阵模式
+        self.quantum_state = u_matrix @ self.quantum_state @ u_matrix.conj().T
+
+    def apply_depolarizing_error(self, qubit, p):
+        """严格匹配 C 语言 operation_Density_Matrix_ERROR 代码"""
+        if p <= 0: return
+
+        X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
+        Z = np.array([[1, 0], [0, -1]], dtype=np.complex128)
+
+        # 计算四个分量: (1-p)ρ + (p/3)(XρX + YρY + ZρZ)
+        # 获取全系统空间的 Pauli 算符
+        full_X = self.get_full_operator(X, qubit)
+        full_Y = self.get_full_operator(Y, qubit)
+        full_Z = self.get_full_operator(Z, qubit)
+
+        rho = self.quantum_state
+        self.quantum_state = (1 - p) * rho + (p / 3.0) * (
+                full_X @ rho @ full_X.conj().T +
+                full_Y @ rho @ full_Y.conj().T +
+                full_Z @ rho @ full_Z.conj().T
+        )
 
     @staticmethod
     def validate_kraus_ops(operators):
@@ -364,9 +349,100 @@ class QuantumEnvironment:
                 f"Allowed tolerance: {atol:.2e}"
             )
 
+    def apply_physical_reset(self, target_qubit, p_reset):
+        """
+        严格对齐 C 语言的 operation_Density_Matrix_reset
+        target_qubit: 目标比特索引
+        p_reset: 重置错误率 (对应 C 语言中的 Q1_error_Probability)
+        """
+        self.convert_to_density()
+        dim = 2 ** self.qreg_size
+
+        # 1. 构造 C 语言中的投影/偏迹算符 (基于单比特)
+        # bra0 = [1, 0], bra1 = [0, 1]
+        m0 = np.array([[1, 0]], dtype=np.complex128)
+        m1 = np.array([[0, 1]], dtype=np.complex128)
+
+        # 2. 构造全系统的偏迹算符
+        # 这里的逻辑是：Tr_i(rho) = M0_i rho M0_i^† + M1_i rho M1_i^†
+        # 我们需要构造维度为 (dim/2, dim) 的算符
+        def build_trace_op(op_single):
+            full_op = np.array([[1.0]], dtype=np.complex128)
+            for i in range(self.qreg_size - 1, -1, -1):
+                if i == target_qubit:
+                    full_op = np.kron(full_op, op_single)
+                else:
+                    full_op = np.kron(full_op, np.eye(2))
+            return full_op
+
+        full_m0 = build_trace_op(m0)
+        full_m1 = build_trace_op(m1)
+
+        # 计算偏迹后的状态 (维度变为 dim/2 x dim/2)
+        rho_reduced = full_m0 @ self.quantum_state @ full_m0.conj().T + \
+                      full_m1 @ self.quantum_state @ full_m1.conj().T
+
+        # 3. 构造 C 语言中的 reset_0_operator_matrix (带有噪声的注入态)
+        # C 语言公式:
+        # [ 1-p,  sqrt((1-p)p) ]
+        # [ sqrt(p(1-p)), p    ]
+        r_matrix = np.array([
+            [1.0 - p_reset, np.sqrt((1.0 - p_reset) * p_reset)],
+            [np.sqrt(p_reset * (1.0 - p_reset)), p_reset]
+        ], dtype=np.complex128)
+
+        # 4. 重新合成全系统密度矩阵 (维度回到 dim x dim)
+        # 注意：C 语言是用 Kronecker_Product(trace_state, reset_0)
+        # 这里的顺序必须严格匹配 C 语言的 Endianness
+        new_rho = np.array([[1.0]], dtype=np.complex128)
+        # 按照 C 语言的逻辑，reset 的比特被放回到了 target_qubit 的位置
+        # 我们采用分步重组的方式：
+
+        # 简单的实现方式是：构造一个注入算符，将 |0> 态放回 target_qubit
+        # 这里直接按照 C 的思路：将 reduced_rho 与 r_matrix 重新张量积
+        # 实际上 C 语言通过多次 SWAP 确保了重置比特在 LSB，所以我们也这样做：
+
+        # 更加通用的物理重置公式 (等效于 C 语言的 SWAP+Trace+Insert):
+        # rho = rho_reduced \otimes R_at_target
+        # 这里我们使用 Kraus 形式来表达这个过程，更不容易出错：
+        # K0 = |0_err><0|, K1 = |0_err><1|
+
+        # 构造带有噪声的 |0> 态矢量 (对应 C 语言 reset_0_operator)
+        # 注意：C 语言这里的 reset_0_operator 实际上是一个密度矩阵算子
+
+        # 我们直接手动重组：
+        self.quantum_state = self._reinsert_qubit(rho_reduced, r_matrix, target_qubit)
+
+    def _reinsert_qubit(self, rho_reduced, r_matrix, target_qubit):
+        """辅助函数：将缩减后的密度矩阵与新比特矩阵在指定位置重新合并"""
+        dim_reduced = 2 ** (self.qreg_size - 1)
+        # 构造一个新的 dim x dim 矩阵
+        new_rho = np.zeros((dim_reduced * 2, dim_reduced * 2), dtype=np.complex128)
+
+        # 遍历所有基矢，将新比特插入到 target_qubit 位置
+        for i in range(dim_reduced):
+            for j in range(dim_reduced):
+                val = rho_reduced[i, j]
+                if abs(val) < 1e-15: continue
+
+                # 将原始索引 i 拆开，在 target_qubit 处插入空位
+                # 例如 qreg=3, target=1: i=10 (binary) -> 1_0 (inserted) -> 100, 101, 110, 111...
+                def insert_bit(idx, bit):
+                    mask = (1 << target_qubit) - 1
+                    return ((idx & ~mask) << 1) | (bit << target_qubit) | (idx & mask)
+
+                for b1 in [0, 1]:
+                    for b2 in [0, 1]:
+                        row = insert_bit(i, b1)
+                        col = insert_bit(j, b2)
+                        # r_matrix 提供了新比特在该位置的密度矩阵分布
+                        new_rho[row, col] = val * r_matrix[b1, b2]
+        return new_rho
+
 class Evaluator:
     np.random.seed()
     def __init__(self, env, parser, ast):
+        self.shot_idx = None
         self.env = env
         self.labels = {}
         self.body_instructions = []
@@ -462,14 +538,16 @@ class Evaluator:
         # 第五阶段：执行多次 shot
         # ==============================================
         results = []
+
         for shot_idx in range(shots):
+            self.shot_idx = shot_idx + 1
             print(f"\n=== Starting shot {shot_idx + 1}/{shots} ===")
 
             # 每次 shot 重置量子态、经典寄存器、PC 等
             self.env.reset_for_shot()
             self.env.shot_completed = False
-            if self.env.error_model and self.env.error_model[0] != 9:  # Apply gate-like noise to all qubits
-                self.env.apply_quantum_noise(list(range(self.env.qreg_size)))
+            # if self.env.error_model:  # Apply gate-like noise to all qubits
+            #     self.env.apply_quantum_noise(list(range(self.env.qreg_size)))
 
             # 打印初始对角元（加防护，避免 size=0 崩溃）
             try:
@@ -581,26 +659,26 @@ class Evaluator:
                 raise ValueError(f"Unknown opcode: {opcode}")
 
             # 在量子操作后应用噪声
-            if opcode in ['CNOT', 'U3']:
-                qubits = self._get_affected_qubits(node)
-                if qubits:
-                    print(f"Unified noise apply for {opcode}")
-                    self.env.apply_quantum_noise(qubits)
+            # if opcode in ['CNOT', 'U3']:
+            #     qubits = self._get_affected_qubits(node)
+            #     if qubits:
+            #         print(f"Unified noise apply for {opcode}")
+            #         self.env.apply_quantum_noise(qubits)
 
-            opcode = opcode_node.value
-            special_mov_dests = {'PC', 'LR', 'SF', 'ZF'}
-            branch_ops = {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'}  # 移除 'MOV'
-            if opcode in branch_ops:
-                pass  # No auto +1
-            elif opcode == 'MOV':
-                dest_operand = operands_node.children[0].value if operands_node else None
-                if dest_operand in special_mov_dests:
-                    pass  # No +1 for MOV to PC/LR/etc.
-                else:
-                    self.env.pc += 1
-            elif opcode in {'ADD', 'SUB', 'MUL', 'DIV', 'U3', 'CNOT', 'reset', 'measure', 'barrier', 'debug',
-                            'debug-p'}:
-                self.env.pc += 1
+            # opcode = opcode_node.value
+            # special_mov_dests = {'PC', 'LR', 'SF', 'ZF'}
+            # branch_ops = {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'}  # 移除 'MOV'
+            # if opcode in branch_ops:
+            #     pass  # No auto +1
+            # elif opcode == 'MOV':
+            #     dest_operand = operands_node.children[0].value if operands_node else None
+            #     if dest_operand in special_mov_dests:
+            #         pass  # No +1 for MOV to PC/LR/etc.
+            #     else:
+            #         self.env.pc += 1
+            # elif opcode in {'ADD', 'SUB', 'MUL', 'DIV', 'U3', 'CNOT', 'reset', 'measure', 'barrier', 'debug',
+            #                 'debug-p'}:
+            #     self.env.pc += 1
 
     @staticmethod
     def _get_affected_qubits(instr_node):  # 改名更清晰，接收的是 Instruction 节点
@@ -652,29 +730,36 @@ class Evaluator:
         # 从Instruction节点中获取Operands
         operands_node = next((c for c in instruction_node.children if c.type == 'Operands'), None)
 
-        if not operands_node or len(operands_node.children) < 2:
-            # 如果只有一个操作数，则为第二个操作数设置默认值
-            if len(operands_node.children) == 1:
-                operands_node.children.append(ASTNode('Operand', value=config.default_Q_error_Code))  # 添加默认的第二个操作数
+        if not operands_node or not operands_node.children:
+            raise ValueError("error instruction requires at least the enable parameter")
 
-        # 检查是否有至少两个操作数
-        if len(operands_node.children) < 1:
-            raise ValueError("Invalid error instruction format")
+        operands = operands_node.children
+        enable_str = operands[0].value
 
-        # 提取第一个操作数作为error_type
-        error_type_operand = operands_node.children[0]
-        error_type = int(error_type_operand.value)
-
-        # 提取后续操作数作为参数
-        params = [float(op.value) for op in operands_node.children[1:]]
-        print(f"Depolarizing noise set with p = {params[0]}")
-
-
-        # 设置错误模型
-        if self.env.qreg_size > 0:
-            self.env.error_model = (error_type, *params)
+        if enable_str in ['TRUE', '1']:
+            enable = True
+        elif enable_str in ['FALSE', '0']:
+            enable = False
         else:
-            self.env._pending_error_model = (error_type, *params)
+            raise ValueError("First parameter must be TRUE/FALSE or 1/0")
+
+        if not enable:
+            self.env.error_model = None
+            if hasattr(self.env, '_pending_error_model'):
+                del self.env._pending_error_model
+            return
+
+        code = config.default_Q_error_Code if len(operands) < 2 else int(operands[1].value)
+        p1 = config.default_Q1_error_Probability if len(operands) < 3 else float(operands[2].value)
+        p2 = config.default_Q2_error_Probability if len(operands) < 4 else float(operands[3].value)
+        p_measure = config.default_measure_error_Probability if len(operands) < 5 else float(operands[4].value)
+        p_reset = config.default_reset_error_Probability if len(operands) < 6 else float(operands[5].value)
+
+        self.env.error_model = (code, p1, p2, p_measure, p_reset)
+        print(f"Error model set: code={code}, p1={p1}, p2={p2}, p_measure={p_measure}, p_reset={p_reset}")
+
+        if hasattr(self.env, '_pending_error_model'):
+            self.env._pending_error_model = self.env.error_model
 
     def execute_qreg(self, node):
         # 获取Operands子节点（关键修正）
@@ -855,41 +940,57 @@ class Evaluator:
         print(f"MOV {dest_str} <- {src_str}  completed.")
 
     def execute_u3(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 4:
-            raise ValueError("U3 requires 4 operands (theta, phi, lambda, qubit)")
+        # 1. 解析参数
+        theta = self._parse_parameter(node.children[1].children[0], 'R')
+        phi = self._parse_parameter(node.children[1].children[1], 'R')
+        lam = self._parse_parameter(node.children[1].children[2], 'R')
+        qubit = self._parse_register_index(node.children[1].children[3].value, 'q')
 
-        # 解析前三个参数（支持立即数或R寄存器）
-        theta = self._parse_parameter(operands_node.children[0], 'R')
-        phi = self._parse_parameter(operands_node.children[1], 'R')
-        lambda_ = self._parse_parameter(operands_node.children[2], 'R')
+        # 2. 构造 U3 矩阵 (严格匹配 C 语言公式)
+        u_gate = np.array([
+            [np.cos(theta / 2), -1j * np.exp(1j * lam) * np.sin(theta / 2)],
+            [-1j * np.exp(1j * phi) * np.sin(theta / 2), np.exp(1j * (phi + lam)) * np.cos(theta / 2)]
+        ], dtype=np.complex128)
 
-        # 解析第四个参数为量子寄存器
-        qubit = self._parse_register_index(operands_node.children[3].value, 'q')
+        # 3. 应用门
+        full_u = self.env.get_full_operator(u_gate, qubit)
+        self.env.apply_unitary(full_u)
 
-        # 量子寄存器范围检查
-        if qubit >= self.env.qreg_size:
-            raise ValueError(f"U3 qubit index out of range: {qubit} (qreg_size={self.env.qreg_size})")
-
-        # 构建量子门
-        u3_gate = self.create_u3_gate(theta, phi, lambda_)
-        self._apply_single_qubit_gate(u3_gate, qubit)
-
-        print(f"Applying U3(theta={theta}, phi={phi}, lambda={lambda_}) to q[{qubit}]")
-        print("U3 matrix:\n", u3_gate)
+        # 4. 应用噪声 (如果开启)
+        if self.env.error_model:
+            p1 = self.env.error_model[1]
+            self.env.apply_depolarizing_error(qubit, p1)
 
     def execute_cnot(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("CNOT requires control and target qubits")
-        control = self._parse_register_index(operands_node.children[0].value, 'q')  # 用户写的第一个 = 控制
-        target = self._parse_register_index(operands_node.children[1].value, 'q')
-        if control == target:
-            raise ValueError("CNOT control and target qubits cannot be the same")
-        if control >= self.env.qreg_size or target >= self.env.qreg_size:
-            raise ValueError(f"CNOT qubit index out of range (qreg_size={self.env.qreg_size})")
-        self._apply_cnot_gate(control, target)  # 只调用一次
-        self.env.quantum_state = np.copy(self.env.quantum_state)
+        control = self._parse_register_index(node.children[1].children[0].value, 'q')
+        target = self._parse_register_index(node.children[1].children[1].value, 'q')
+
+        # 构造全系统 CNOT: |0><0|⊗I + |1><1|⊗X
+        P0 = np.array([[1, 0], [0, 0]], dtype=np.complex128)
+        P1 = np.array([[0, 0], [0, 1]], dtype=np.complex128)
+        X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        I = np.eye(2, dtype=np.complex128)
+
+        # 构造两个分支的张量积并求和
+        op0 = np.array([[1.0]], dtype=np.complex128)
+        op1 = np.array([[1.0]], dtype=np.complex128)
+
+        for i in range(self.env.qreg_size - 1, -1, -1):
+            # 分支 0
+            gate0 = P0 if i == control else I
+            op0 = np.kron(op0, gate0)
+            # 分支 1
+            gate1 = P1 if i == control else (X if i == target else I)
+            op1 = np.kron(op1, gate1)
+
+        full_cnot = op0 + op1
+        self.env.apply_unitary(full_cnot)
+
+        # 匹配 C 语言逻辑：CNOT 后对 control 和 target 分别应用 error
+        if self.env.error_model:
+            p2 = self.env.error_model[2]
+            self.env.apply_depolarizing_error(control, p2)
+            self.env.apply_depolarizing_error(target, p2)
 
     def execute_gps(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
@@ -929,101 +1030,71 @@ class Evaluator:
     def create_u3_gate(theta, phi, lambda_):
         ct = math.cos(theta / 2)
         st = math.sin(theta / 2)
+        # C语言逻辑:
+        # U[0][0] = cos(t/2)
+        # U[0][1] = -i * exp(i*lam) * sin(t/2)
+        # U[1][0] = -i * exp(i*phi) * sin(t/2)
+        # U[1][1] = exp(i*(phi+lam)) * cos(t/2)
+
         el = cmath.exp(1j * lambda_)
         ep = cmath.exp(1j * phi)
+        e_both = cmath.exp(1j * (phi + lambda_))
+
         return np.array([
-            [ct, -el * st],
-            [ep * st, ep * el * ct]
+            [complex(ct, 0), -1j * el * st],
+            [-1j * ep * st, e_both * ct]
         ], dtype=np.complex128)
 
-    def _apply_single_qubit_gate(self, gate, qubit):
-        """
-        将单量子比特门作用到指定量子比特上。
+    def apply_single_qubit_noise(self, qubit_idx):
+        """模仿 C 语言：针对特定比特应用当前错误模型"""
+        if not self.env.error_model:
+            return
 
-        参数:
-            gate: 2×2 的单量子比特门矩阵 (numpy array, complex)
-            qubit: 目标量子比特索引 (从 0 开始)
-                   约定：q[0] 是最低有效位 (LSB)，对应状态向量的索引最低位
+        noise_type, p1, p2, p_measure, p_reset = self.env.error_model
+        # C 语言在 U3 和 CNOT 之后都使用参数 p (p1 或 p2)
+        # 注意：C 代码中 CNOT 之后传入的是 Q2_error_Probability
+        p = p1  # 默认为 p1
 
-        支持模式：
-            - statevector: |ψ⟩ → U |ψ⟩
-            - density_matrix: ρ → U ρ U†
-        """
-        if not isinstance(gate, np.ndarray) or gate.shape != (2, 2):
-            raise ValueError("gate must be a 2x2 numpy array")
+        kraus_ops = self.env.generate_kraus_operators(noise_type, qubit_idx, [p])
 
-        if qubit < 0 or qubit >= self.env.qreg_size:
-            raise ValueError(f"qubit index {qubit} out of range [0, {self.env.qreg_size - 1}]")
+        self.env.convert_to_density()
+        new_rho = np.zeros_like(self.env.quantum_state)
+        for k in kraus_ops:
+            new_rho += k @ self.env.quantum_state @ k.conj().T
 
-        dim = 2 ** self.env.qreg_size
-
-        # 构建全系统门：U 在 qubit 位置，其他位置为 I
-        full_gate = np.eye(1, dtype=np.complex128)
-
-        # 约定：q[0] 是最低位 → 从右往左（低位到高位）构建 kron
-        # 因此我们从 q[0] 到 q[n-1] 正向遍历
-        for q in range(self.env.qreg_size):
-            if q == qubit:
-                full_gate = np.kron(full_gate, gate)
-            else:
-                full_gate = np.kron(full_gate, np.eye(2))
-
-        # 应用门
-        if self.env.simulation_mode == 'statevector':
-            self.env.quantum_state = full_gate @ self.env.quantum_state
-            # 可选：归一化（虽然理论上 unitary 应该保持模长）
-            norm = np.linalg.norm(self.env.quantum_state)
-            if norm > 1e-12:
-                self.env.quantum_state /= norm
-
-        elif self.env.simulation_mode == 'density_matrix':
-            self.env.quantum_state = full_gate @ self.env.quantum_state @ full_gate.conj().T
-            # 保持迹为 1
-            trace = np.real(np.trace(self.env.quantum_state))
-            if abs(trace - 1.0) > 1e-10:
-                self.env.quantum_state /= trace
-
-        else:
-            raise ValueError(f"Unsupported simulation mode: {self.env.simulation_mode}")
-
-        # 调试输出
-        # print(f"Applied single-qubit gate to q[{qubit}]")
-        # print(f"Full gate shape: {full_gate.shape}")
+        # 归一化 (对应 C 的 state_normalized 处理密度矩阵的等效操作)
+        trace = np.real(np.trace(new_rho))
+        if trace > 1e-15:
+            new_rho /= trace
+        self.env.quantum_state = new_rho
 
     def _apply_cnot_gate(self, control, target):
-        """control 和 target 是量子位索引，q[0] 是最低位 (LSB)"""
         dim = 2 ** self.env.qreg_size
-        cnot = np.eye(dim, dtype=np.complex128)
+        # 构建投影算符
+        P0 = np.array([[1, 0], [0, 0]], dtype=np.complex128)
+        P1 = np.array([[0, 0], [0, 1]], dtype=np.complex128)
+        X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
+        I = np.eye(2, dtype=np.complex128)
 
-        for i in range(dim):
-            # 提取 control 位的值
-            ctrl_bit = (i >> control) & 1
+        # 构造全系统 CNOT: Op0 = I...⊗P0⊗...I , Op1 = I...⊗P1⊗...X
+        def build_full(op_c, op_t):
+            res = np.eye(1, dtype=np.complex128)
+            for i in range(self.env.qreg_size):
+                gate = I
+                if i == control:
+                    gate = op_c
+                elif i == target:
+                    gate = op_t
+                res = np.kron(gate, res)
+            return res
 
-            if ctrl_bit == 1:
-                # 翻转 target 位
-                flipped_i = i ^ (1 << target)
-                # 把原始位置的振幅移动到翻转后的位置
-                cnot[flipped_i, i] = 1.0
-                cnot[i, i] = 0.0  # 清除原始对角
-            # else: 保持 identity（已由 eye 设置）
-
-        # 可选：打印验证
-        print("CNOT control q[{}] → target q[{}]".format(control, target))
-        print("CNOT matrix diagonal:", [cnot[k, k] for k in range(dim)])
-        print("Non-zero off-diagonal count:", np.count_nonzero(cnot - np.eye(dim)))
+        full_cnot = build_full(P0, I) + build_full(P1, X)
 
         # 应用
         if self.env.simulation_mode == 'statevector':
-            self.env.quantum_state = cnot @ self.env.quantum_state
-        else:  # density_matrix
-            self.env.quantum_state = cnot @ self.env.quantum_state @ cnot.conj().T
-
-        # 调试用：打印应用后的对角（可选）
-        if self.env.simulation_mode == 'density_matrix':
-            diag = [np.real(self.env.quantum_state[i, i]) for i in range(dim)]
-            print("After CNOT diagonal:", diag)
-
-        self.env.quantum_state = self.env.quantum_state.copy()
+            self.env.quantum_state = full_cnot @ self.env.quantum_state
+        else:
+            self.env.quantum_state = full_cnot @ self.env.quantum_state @ full_cnot.conj().T
 
     def execute_measure(self, node):
         assert isinstance(self.env.quantum_state, np.ndarray), \
@@ -1042,24 +1113,27 @@ class Evaluator:
             raise ValueError(f"CReg index out of range: {creg_idx}")
 
         if self.env.simulation_mode == 'statevector':
+            # 1. 计算概率 (基于 LSB: q[0] 是 1, q[1] 是 2...)
             probs = [0.0, 0.0]
-            for i, amp in enumerate(self.env.quantum_state):
-                bit = (i >> qubit) & 1   # 改成低位索引
-                probs[bit] += abs(amp) ** 2
-            probs = np.array(probs)
-            probs /= np.sum(probs)
-            outcome = np.random.choice([0, 1], p=probs)
-            # 塌缩态
-            mask = [(i >> (self.env.qreg_size - 1 - qubit)) & 1 == outcome
-                    for i in range(len(self.env.quantum_state))]
-            self.env.quantum_state = np.where(mask, self.env.quantum_state, 0)
-            norm = np.linalg.norm(self.env.quantum_state)
+            dim = len(self.env.quantum_state)
+            for i in range(dim):
+                # 获取第 i 个基态在 target qubit 上的比特值 (0 或 1)
+                bit = (i >> qubit) & 1
+                probs[bit] += np.abs(self.env.quantum_state[i]) ** 2
+            # 2. 采样结果
+            outcome = np.random.choice([0, 1], p=probs / np.sum(probs))
+            # 3. 状态塌缩 (修改此处以匹配位序)
+            new_state = np.zeros_like(self.env.quantum_state)
+            for i in range(dim):
+                if ((i >> qubit) & 1) == outcome:
+                    new_state[i] = self.env.quantum_state[i]
+            # 4. 归一化
+            norm = np.linalg.norm(new_state)
             if norm > 0:
-                self.env.quantum_state /= norm
-            if self.env.error_model and self.env.error_model[0] == 9:
-                p_flip = self.env.error_model[1] if len(self.env.error_model) > 1 else 0.01  # Default flip prob
-                if np.random.rand() < p_flip:
-                    outcome = 1 - outcome  # Bit-flip error
+                self.env.quantum_state = new_state / norm
+            else:
+                self.env.quantum_state = new_state  # 避免除以 0
+            # 5. 更新经典寄存器 (匹配 C 语言: 存储 0 或 1，或根据需求存储概率)
             self.env.creg[creg_idx] = outcome
 
         elif self.env.simulation_mode == 'density_matrix':
@@ -1107,9 +1181,9 @@ class Evaluator:
                 new_rho[base_idx, base_idx] = 1.0
             self.env.quantum_state = new_rho
 
-            if self.env.error_model and self.env.error_model[0] == 9:
-                p_flip = self.env.error_model[1] if len(self.env.error_model) > 1 else 0.01  # Default flip prob
-                if np.random.rand() < p_flip:
+            if self.env.error_model:
+                _, _, _, p_measure, _ = self.env.error_model
+                if np.random.rand() < p_measure:
                     outcome = 1 - outcome  # Bit-flip error
 
             self.env.creg[creg_idx] = outcome
@@ -1287,7 +1361,7 @@ class Evaluator:
         return label_operand.value.strip(':')  # 去除可能存在的冒号
 
     def _get_label_address(self, label):
-        """获取标签地址并验证存在性"""
+        label = label.strip(':')
         if label not in self.labels:
             raise ValueError(f"Undefined label: {label}")
         return self.labels[label]
@@ -1391,26 +1465,25 @@ class Evaluator:
             return int(expr)
 
     def execute_debug(self, node):
-        self.print_debug_info(shot_id=1)
+        self.print_debug_info(self.shot_idx)
 
     def execute_debug_p(self, node):
-        self.print_debug_info(shot_id=1)
+        self.print_debug_info(self.shot_idx)
         input("Press 'p' to continue: ")
 
     def execute_reset(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        qubit = None
-        if operands_node and operands_node.children:
-            qubit = self._parse_register_index(operands_node.children[0].value, 'q')
-        if qubit is not None:
-            self.env.reset_quantum_state(qubits=[qubit])
-        else:
-            self.env.reset_quantum_state()
-        # 应用噪声
-        if self.env.error_model and qubit is not None:
-            self.env.apply_quantum_noise([qubit])
-        print("After reset, rho[0,0]:", self.env.quantum_state[0, 0])
-        print("rho[1,1]:", self.env.quantum_state[1, 1] if self.env.simulation_mode == 'density_matrix' else "N/A")
+        qubit = self._parse_register_index(operands_node.children[0].value, 'q')
+
+        # 获取错误模型中的重置概率 (Error Code 8)
+        p_reset = 0.0
+        if self.env.error_model:
+            code, p1, p2, p_measure, p_reset_val = self.env.error_model
+            if code == 8:
+                p_reset = p1  # C 语言中 reset 使用的是 Q1_error_Probability
+
+        print(f"Executing Physical Reset on q[{qubit}] with p={p_reset}")
+        self.env.apply_physical_reset(qubit, p_reset)
 
     def execute_barrier(self, node):
         # No-op in this simulation
@@ -1423,8 +1496,8 @@ class Evaluator:
         self.env.registers[dest] = np.random.uniform(0, 1)
 
     def print_debug_info(self, shot_id=1):
-
         current_rho = self.env.quantum_state.copy()
+
         # 根据模式选择文件名
         if self.env.simulation_mode == "statevector":
             filename = config.filename_debug
@@ -1437,8 +1510,14 @@ class Evaluator:
         log_dir = os.path.dirname(self.parser.source_path) if self.parser.source_path else os.getcwd()
         filepath = os.path.join(log_dir, filename)
 
-        # 如果文件不存在，先写入固定开头
-        if not os.path.exists(filepath):
+        # 使用一个类属性来标记是否是“本次程序运行的第一次 debug 调用”
+        if not hasattr(self, '_debug_file_initialized'):
+            # 第一次调用：检查文件是否存在 → 如果存在就删除
+            if os.path.exists(filepath):
+                os.remove(filepath)
+                print(f"Debug file existed, deleted: {filepath}")
+
+            # 新建文件并写入头部（源代码 + Label 信息）
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(self.source_code_text.strip() + "\n\n")
                 f.write("Label Number   Sequence   Label Symbol\n")
@@ -1446,7 +1525,10 @@ class Evaluator:
                     f.write(f"Label   {idx}:      {seq:<8} {symbol}\n")
                 f.write("\n")
 
-        # 以追加模式写入调试信息
+            # 标记已经初始化过，后续调用不再删除或重写头部
+            self._debug_file_initialized = True
+
+        # 以追加模式写入本次调试信息
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(f"debuging:  current status:  PC={self.env.pc}\n")
             f.write(f"shot: {shot_id}\n")
@@ -1454,7 +1536,7 @@ class Evaluator:
             # 区分两种模式
             if self.env.simulation_mode == "density_matrix":
                 f.write("XQI: current Density Matrix states:\n\n")
-                matrix = current_rho  # ← 用拷贝
+                matrix = current_rho
                 rows, cols = matrix.shape
                 f.write(f"matrix rows:{rows}, matrix columns:{cols}:\n")
                 for i in range(rows):
@@ -1464,16 +1546,14 @@ class Evaluator:
                 f.write("\n\n")
 
             elif self.env.simulation_mode == "statevector":
-                f.write("XQI: current states (High Qubit->Low Qubit) :\n")
+                f.write("XQI: current states (High Qubit->Low Qbit) :\n")
                 state = self.env.quantum_state
                 dim = len(state)
-                # 输出态矢量
                 for idx, amp in enumerate(state):
                     bin_str = format(idx, f"0{int(np.log2(dim))}b")
                     f.write(f"state {bin_str}:  ({amp.real:.6f})+({amp.imag:.6f})i\n")
                 f.write("corresponding Density Matrix state:\n\n")
 
-                # 转换为密度矩阵
                 rho = np.outer(state, np.conjugate(state))
                 rows, cols = rho.shape
                 f.write(f"matrix rows:{rows}, matrix columns:{cols}:\n")
@@ -1483,7 +1563,6 @@ class Evaluator:
                         f.write(f"[{i}][{j}]:({val.real:.6f})+({val.imag:.6f})i\n")
                 f.write("\n\n")
 
-                # 输出概率分布
                 f.write("current states probability (High Qubit->Low Qubit) :\n")
                 probs = np.abs(state) ** 2
                 for idx, p in enumerate(probs):
@@ -1491,16 +1570,16 @@ class Evaluator:
                     f.write(f"state {bin_str}:    {p:.6f}\n")
                 f.write("\n\n")
 
-            # 打印寄存器
+            # 寄存器
             f.write(" register:\n")
             for idx, val in enumerate(self.env.registers):
                 f.write(f"R[{idx:2d}]=   {val:.10f}\n")
             f.write("\n")
 
-            # 打印 CPSR
+            # CPSR
             f.write(f"CPSR: SIGN_FLAG={self.env.SF};  ZERO_FLAG={self.env.ZF}.\n\n")
 
-            # 打印内存
+            # 内存
             f.write(" memory:\n")
             for idx, val in enumerate(self.env.memory):
                 f.write(f"M[{idx:4d}]=   {val:.10f}\n")

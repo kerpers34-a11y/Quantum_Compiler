@@ -215,7 +215,6 @@ class Parser:
                 # validate 函数内部已经 raise，这里不会执行到
                 pass
             node.children = [opcode_node, operands_node]
-            self.eat('ASSIGN')
         elif opcode_node.value == "U3":
             operands_node = self.operand_list()
             self.validate_u3_operands(operands_node.children)
@@ -483,24 +482,68 @@ class Parser:
 
     @staticmethod
     def validate_error_operands(operands):
-        """ 只做最基本检查，数量 1~4，第一个是整数，其余可转为 float """
-        if not (1 <= len(operands) <= 4):
-            raise SyntaxError(f"error 需要 1~4 个参数，实际 {len(operands)} 个")
+        """
+        验证 error( ... ) 内的参数
+        规则：
+          - 至少 1 个参数（enable）
+          - 最多 6 个参数
+          - 第1个：TRUE / FALSE / 1 / 0
+          - 如果 enable 是 FALSE，后续参数可有可无（但若有会被忽略）
+          - 如果 enable 是 TRUE，后续参数依次为：
+              code (整数 0~9，默认 config.default_Q_error_Code)
+              p_single (单门概率 0~1，默认 config.default_Q1_error_Probability)
+              p_double (双门概率 0~1，默认 config.default_Q2_error_Probability)
+              p_measure (测量概率 0~1，默认值)
+              p_reset   (重置概率 0~1，默认值)
+        """
+        if len(operands) < 1:
+            raise SyntaxError("error( ) 内至少需要一个参数：TRUE 或 FALSE")
 
-        # 第一个必须是 0~9 的整数（error type）
-        try:
-            etype = int(operands[0].value)
-            if not 0 <= etype <= 9:
-                raise ValueError
-        except:
-            raise SyntaxError(f"error 第一个参数必须是 0~9 的整数，收到 '{operands[0].value}'")
+        if len(operands) > 6:
+            raise SyntaxError(f"error( ) 内最多允许 6 个参数，实际收到 {len(operands)} 个")
 
-        # 后续参数尝试转为 float（概率或代码）
+        # 第一个参数：enable 开关
+        enable_node = operands[0]
+        enable_val = enable_node.value.strip().upper()
+
+        if enable_val not in ('TRUE', 'FALSE', '1', '0'):
+            raise SyntaxError(
+                f"error 第一个参数必须是 TRUE / FALSE / 1 / 0，收到 '{enable_node.value}' "
+                f"(行 {enable_node.line}, 列 {enable_node.col})"
+            )
+
+        # 如果是 FALSE，后续参数不做严格要求（可以有，但会被忽略）
+        if enable_val in ('FALSE', '0'):
+            # 可选：可以在这里警告如果有额外参数
+            if len(operands) > 1:
+                print(f"警告：error(FALSE, ...) 中的额外参数将被忽略 (行 {operands[1].line})")
+            return True
+
+        # 如果是 TRUE，验证后续参数的类型和范围
         for i, op in enumerate(operands[1:], start=2):
-            try:
-                float(op.value)
-            except:
-                raise SyntaxError(f"error 第 {i} 个参数应为数字，收到 '{op.value}'")
+            val_str = op.value.strip()
+
+            if i == 2:  # code（第二个参数）
+                try:
+                    code = int(val_str)
+                    if not (0 <= code <= 9):  # 假设 error code 范围 0~9
+                        raise ValueError
+                except ValueError:
+                    raise SyntaxError(
+                        f"error 第二个参数（error code）必须是 0~9 的整数，"
+                        f"收到 '{val_str}' (行 {op.line})"
+                    )
+
+            else:  # p_single, p_double, p_measure, p_reset
+                try:
+                    prob = float(val_str)
+                    if not 0.0 <= prob <= 1.0:
+                        raise ValueError("概率必须在 0.0 ~ 1.0 之间")
+                except ValueError:
+                    raise SyntaxError(
+                        f"error 第 {i} 个参数（概率）必须是 0.0 ~ 1.0 的浮点数，"
+                        f"收到 '{val_str}' (行 {op.line})"
+                    )
 
         return True
 
