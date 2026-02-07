@@ -6,3 +6,4 @@ pyvim<4.0,>=3.0
 Pygments<3.0,>=2.18
 scipy<2.0,>=1.14
 wcwidth<1.0,>=0.2
+pyperclip==1.11.0

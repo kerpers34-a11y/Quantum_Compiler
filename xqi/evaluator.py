@@ -111,41 +111,30 @@ class QuantumEnvironment:
         self.simulation_mode = 'density_matrix'
 
     def apply_quantum_noise(self, qubits):
-        """应用当前配置的量子噪声"""
-        if self.qreg_size == 0 or not qubits: # Early return for trivial cases
+        if self.qreg_size == 0 or not qubits:
             return
-        print(f"Applying noise to qubits {qubits} with model {self.error_model}")
         if not self.error_model:
             return
-        if hasattr(self, '_pending_error_model'):
-            self.error_model = self._pending_error_model
-            print(f"Applying delayed error model at first noise application: {self._pending_error_model}")
-            del self._pending_error_model
-        noise_type, p1, p2, p_measure, p_reset = self.error_model
-        p = p1 if len(qubits) == 1 else p2
-        kraus_ops = self.generate_kraus_operators(noise_type, qubits, [p])
-        if any(not isinstance(k, np.ndarray) for k in kraus_ops):
-            raise TypeError("Kraus operators must be numpy arrays")
+
+        noise_type, p1_data, p2_data, p_measure, p_reset = self.error_model
+
+        # 确定使用单比特还是双比特参数（原逻辑扩展）
+        params = p1_data if len(qubits) == 1 else p2_data
+        # 如果 params 不是列表，则封装成列表以适配 generate_kraus_operators
+        if not isinstance(params, list):
+            params = [params]
+
         self.convert_to_density()
-        # 应用完整噪声通道：sum K rho K†
-        new_rho = np.zeros_like(self.quantum_state, dtype=np.complex128)
-        for k in kraus_ops:
-            if np.allclose(k, 0): # 跳过零算子（针对p=1.0时的无效项）
-                continue
-            temp = k @ self.quantum_state @ k.conj().T
-            new_rho += temp
-        trace = np.real(np.trace(new_rho))
-        if trace > 1e-12:
-            new_rho /= trace
-        else:
-            print("Warning: trace after noise ≈ 0, resetting to maximally mixed")
-            if not isinstance(self.quantum_state, np.ndarray):
-                self.quantum_state = np.array(self.quantum_state)
-            dim = self.quantum_state.shape[0]
-            new_rho = np.eye(dim, dtype=np.complex128) / dim
-        self.quantum_state = new_rho
-        assert isinstance(self.quantum_state, np.ndarray), \
-            f"quantum_state corrupted: {type(self.quantum_state)}"
+        for qubit in qubits:
+            kraus_ops = self.generate_kraus_operators(noise_type, qubit, params)
+
+            new_rho = np.zeros_like(self.quantum_state, dtype=np.complex128)
+            for k in kraus_ops:
+                new_rho += k @ self.quantum_state @ k.conj().T
+
+            trace = np.real(np.trace(new_rho))
+            self.density_matrix = new_rho / trace if trace > 1e-15 else new_rho
+            self.quantum_state = self.density_matrix
     def generate_kraus_operators(self, noise_type, qubit_idx, params):
         p = params[0]
         I = np.eye(2, dtype=np.complex128)
@@ -164,6 +153,36 @@ class QuantumEnvironment:
             k1 = np.sqrt(p) * np.array([[1, 0], [0, 0]], dtype=np.complex128)
             k2 = np.sqrt(p) * np.array([[0, 0], [0, 1]], dtype=np.complex128)
             raw_ops = [(1.0, k0), (1.0, k1), (1.0, k2)]
+        elif noise_type == 4:  # Thermal Relaxation (热弛豫)
+            # params: [T1, T2, Tgate]
+            t1, t2, tg = params[0], params[1], params[2]
+            if t2 > 2 * t1: t2 = 2 * t1  # 物理约束限制
+
+            p_reset = 1 - np.exp(-tg / t1)
+            p_phase = 1 - np.exp(-tg / t2)
+
+            # 组合算符：振幅衰减 + 相位变换
+            # 这里采用常见的近似实现
+            k0 = np.array([[1, 0], [0, np.sqrt(1 - p_phase)]], dtype=np.complex128)
+            k1 = np.array([[0, np.sqrt(p_reset)], [0, 0]], dtype=np.complex128)
+            # 保持迹守恒的修正项
+            k2 = np.array([[np.sqrt(1 - p_reset) - np.sqrt(1 - p_phase), 0], [0, 0]], dtype=np.complex128)
+            raw_ops = [(1.0, k0), (1.0, k1), (1.0, k2)]
+
+        elif noise_type == 5:  # Pauli Error (泡利误差)
+            # params: [px, py, pz]
+            px, py, pz = params[0], params[1], params[2]
+            p_id = 1.0 - px - py - pz
+            raw_ops = [(np.sqrt(p_id), I), (np.sqrt(px), X), (np.sqrt(py), Y), (np.sqrt(pz), Z)]
+
+        elif noise_type == 6:  # Coherent Unitary Error (相干幺正误差)
+            # params: [eps_x, eps_y, eps_z] (微小旋转弧度)
+            ex, ey, ez = params[0], params[1], params[2]
+            # 构造误差旋转矩阵 U = exp(-i * (ex*X + ey*Y + ez*Z) / 2)
+            from scipy.linalg import expm
+            u_err = expm(-0.5j * (ex * X + ey * Y + ez * Z))
+            raw_ops = [(1.0, u_err)]
+
         else:
             raw_ops = [(1.0, I)] # Default Identity
         # 提升到全系统空间
@@ -292,88 +311,129 @@ class Evaluator:
         self.dm_state_dat_path = ""
 
     def evaluate(self, ast):
-        # 1. 初始化标签映射 (用于跳转控制)
-        self.labels = self.env.collect_labels(ast)
+        # --- 1. 预解析配置与指令准备（不打印） ---
+        def get_node_opcode(instr_node):
+            for child in instr_node.children:
+                if child.type == 'Opcode': return child.value
+            return None
 
-        # 2. 第一阶段：扫描配置信息 (qreg, creg, error, shot)
-        # 我们必须先知道 qreg_size 和 shot_total 才能初始化二进制文件
-        shot_node = None
-        config_opcodes = {'shot', 'qreg', 'creg', 'error'}
-
+        # 扫描以确定 shot 总数
         for node in ast.children:
             if node.type == 'Instruction':
-                opcode = node.children[0].value
-                if opcode in config_opcodes:
-                    self.execute_instruction(node)
-                    if opcode == 'shot':
-                        shot_node = node
+                opcode = get_node_opcode(node)
+                if opcode == 'shot':
+                    ops = next((c for c in node.children if c.type == 'Operands'), None)
+                    if ops and ops.children: self.shot_total = int(ops.children[0].value)
+        if self.shot_total <= 0: self.shot_total = 1
 
-        if not shot_node:
-            raise ValueError("Error: Missing 'shot' instruction in XQIASM.")
-
-        # 获取总 shot 次数
-        operands = next(c for c in shot_node.children if c.type == 'Operands')
-        self.shot_total = int(operands.children[0].value)
-
-        # 3. 初始化二进制文件 (对应 C 语言 BOOL_First_Time_shot == true 的初始化部分)
-        self._prepare_final_state_files()
-
-        # 4. 收集主体电路指令 (排除配置指令、BEGIN、END)
+        # 构建执行用的指令列表
         self.body_instructions = []
+        self.labels = {}
+        config_opcodes = {'shot', 'qreg', 'creg', 'error'}
+        exclude_opcodes = config_opcodes | {'XQI-BEGIN', 'XQI-END', ';'}
+
         for node in ast.children:
-            if node.type == 'Instruction':
-                opcode = node.children[0].value
-                if opcode not in config_opcodes and opcode not in ['XQI-BEGIN', 'XQI-END']:
+            if node.type == 'Label':
+                # 记录标签对应的指令索引
+                self.labels[node.value.strip(':').strip()] = len(self.body_instructions)
+            elif node.type == 'Instruction':
+                opcode = get_node_opcode(node)
+                # qreg/creg 需要在执行前初始化，但我们可以通过标志位控制其内部打印
+                if opcode == 'qreg' or opcode == 'creg':
+                    # 执行但不立即打印（或者根据需要保持默认打印）
+                    self.execute_instruction(node)
+                elif opcode and opcode not in exclude_opcodes:
                     self.body_instructions.append(node)
 
-        # 初始化统计数组
         num_states = 2 ** self.env.qreg_size
         self.shots_count_sv = [0] * num_states
         self.shots_count_dm = [0] * num_states
+        self._prepare_final_state_files()
 
-        print(f"Starting simulation: {self.shot_total} shots, {self.env.qreg_size} qubits.")
+        # 记录用于展示的测量前状态
+        self.pre_measure_state_sv = None
 
-        # 5. 核心 Shot 循环 (对应 C 语言 main 函数中的 shot_nth 循环)
-        results = []
-        for shot_idx in range(self.shot_total):
-            self.shot_idx = shot_idx + 1  # 供 debug 使用
+        # --- 2. 核心 Shot 循环 (首先执行) ---
+        for shot_nth in range(1, self.shot_total + 1):
+            if shot_nth == 1:
+                print(f"\nTotal Program Row:{len(self.body_instructions):-10d}\n")
 
-            # 重置本轮状态 (对应 C 语言 930-1000 行的重置逻辑)
+            self.shot_idx = shot_nth
             self.env.reset_for_shot()
-            self.env.shot_completed = False
             self.env.pc = 0
+            captured_this_shot = False
 
-            # 执行电路指令
             while self.env.pc < len(self.body_instructions) and not self.env.shot_completed:
+                # 打印 PC 轨迹
+                print(f"PC={self.env.pc:<10d} (shot: {shot_nth})")
+
                 instr_node = self.body_instructions[self.env.pc]
+                opcode = get_node_opcode(instr_node)
+
+                # 捕获测量前状态
+                if opcode == 'measure' and not captured_this_shot:
+                    self.pre_measure_state_sv = self.env.state_vector.copy()
+                    captured_this_shot = True
+
                 old_pc = self.env.pc
-
                 self.execute_instruction(instr_node)
-
-                # 如果指令没有触发跳转，则 PC 自动 +1
                 if self.env.pc == old_pc and not self.env.shot_completed:
                     self.env.pc += 1
 
-            # --- 关键：每轮 Shot 结束后追加当前态数据到二进制文件 ---
-            # 对应 C 语言约 1030 行：fwrite(&Before_measure_state...)
             self._append_shot_states_to_binary()
+            self.shots_count_sv[self._calculate_current_state_code()] += 1
+            self.shots_count_dm[self._calculate_dm_sample_code()] += 1
+            print("")  # 每个 shot 后的换行
 
-            # 记录测量统计 (使用你现有的计算逻辑)
-            sv_code = self._calculate_current_state_code()
-            if sv_code < num_states:
-                self.shots_count_sv[sv_code] += 1
+        # --- 3. 打印指令清单与标签表 (Shot 结束后) ---
+        print("\nOperate Instructions:\n")
+        print("XQI-BEGIN")
+        lines = self.source_code_text.splitlines()
+        display_idx = 1
+        for line in lines:
+            clean = line.strip()
+            if not clean or any(x in clean for x in ["XQI-BEGIN", "XQI-END", "Operate Instructions"]):
+                continue
+            # 清理可能存在的旧行号
+            import re
+            clean = re.sub(r'^\d+:\s*', '', clean)
+            print(f"{display_idx:>10d}: {clean}")
+            display_idx += 1
+        print("XQI-END\n")
 
-            dm_code = self._calculate_dm_sample_code()
-            if dm_code < num_states:
-                self.shots_count_dm[dm_code] += 1
+        print("Label Number   Sequence   Label Symbol")
+        for idx, (seq, symbol) in enumerate(self.labels_info):
+            # Sequence 通常指向指令的显示行号
+            print(f"Label {idx:3d}:      {seq + 1:3d}        {symbol}")
+        print("\n")
 
-            results.append(self.env.creg.copy())
+        # --- 4. 打印测量事件信息 ---
+        if self.pre_measure_state_sv is not None:
+            self._print_complete_measure_info(self.pre_measure_state_sv)
+            print("\nConsider the qubits NOT measured:")
+            self._print_complete_measure_info(self.pre_measure_state_sv)
 
-        # 6. 所有 Shot 结束后，写入 COUNT 统计信息 (对应 C 语言约 1177 行)
+        # --- 5. 打印最终统计结果 ---
+        print(f"\n\nXQI Success: After measure, STATE COUNT:")
+        print(f"Total Count:   {self.shot_total}")
+        for i in range(num_states):
+            bin_str = format(i, f'0{self.env.qreg_size}b')
+            count = self.shots_count_sv[i]
+            prob = count / self.shot_total
+            print(f"State:        {bin_str}:     Count={count:6d},    Probability={prob:.6f}")
+
+        print(f"\n\nXQI Success: After measure, STATE COUNT (Density Matrix):")
+        print(f"Total Count:   {self.shot_total}")
+        for i in range(num_states):
+            bin_str = format(i, f'0{self.env.qreg_size}b')
+            count = self.shots_count_dm[i]
+            prob = count / self.shot_total
+            print(f"State:        {bin_str}:     Count={count:6d},    Probability={prob:.6f}")
+
         self._finalize_binary_files()
+        print("\n\n          !SUCCESS!")
+        print(" XQI: Quantum Computing Program is Terminated Normally!  \n")
 
-        print("\nSimulation completed successfully.")
-        return results
 
     def _prepare_final_state_files(self):
         """【开头】创建文件，写入对齐的文件头"""
@@ -445,71 +505,47 @@ class Evaluator:
         这里直接复用计算逻辑（或根据需要定制）
         """
         return self._calculate_current_state_code()
+
     def execute_instruction(self, node):
         if node.type == 'Instruction':
-            # 提取Opcode和Operands子节点
-            opcode_node = None
-            operands_node = None
-            for child in node.children:
-                if child.type == 'Opcode':
-                    opcode_node = child
-                elif child.type == 'Operands':
-                    operands_node = child
-            if not opcode_node:
-                raise ValueError("Instruction missing opcode")
+            opcode_node = next(c for c in node.children if c.type == 'Opcode')
             opcode = opcode_node.value
-            if opcode == 'shot':
-                self.execute_shot(node)
-            elif opcode == 'error':
-                self.execute_error(node)
-            elif opcode == 'qreg':
-                self.execute_qreg(node)
-            elif opcode == 'creg':
-                self.execute_creg(node)
-            elif opcode == 'MOV':
-                self.execute_mov(node)
-            elif opcode == 'CNOT':
-                self.execute_cnot(node)
-            elif opcode == 'U3':
-                self.execute_u3(node)
-            elif opcode == 'measure':
-                self.execute_measure(node)
-            elif opcode == 'SUB':
-                self.execute_sub(node)
-            elif opcode == 'ADD':
-                self.execute_add(node)
-            elif opcode == 'MUL':
-                self.execute_mul(node)
-            elif opcode == 'DIV':
-                self.execute_div(node)
-            elif opcode == 'LDR':
-                self.execute_ldr(node)
-            elif opcode == 'STR':
-                self.execute_str(node)
-            elif opcode == 'CLDR':
-                self.execute_cldr(node)
-            elif opcode == 'CSTR':
-                self.execute_cstr(node)
-            elif opcode == 'debug':
-                self.execute_debug(node)
-            elif opcode == 'debug-p':
-                self.execute_debug_p(node)
-            elif opcode == 'reset':
-                self.execute_reset(node)
-            elif opcode == 'barrier':
-                self.execute_barrier(node)
-            elif opcode == 'rand':
-                self.execute_rand(node)
-            elif opcode == 'GPS':
-                self.execute_gps(node)
-            elif opcode == 'XQI-BEGIN':
-                pass
-            elif opcode == 'XQI-END':
-                pass
-            elif opcode in {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'}:
-                self.execute_branch(node, opcode)
+
+            # 1. 记录当前指令是否是量子操作
+            is_quantum_gate = opcode in ['U3', 'CNOT', 'GPS']
+
+            # 2. 执行指令基础操作 (需移除 execute_u3 等内部的 noise 调用)
+            # 根据 opcode 分发执行...
+            method_name = f"execute_{opcode.lower().replace('-', '_')}"
+            if hasattr(self, method_name):
+                getattr(self, method_name)(node)
             else:
-                raise ValueError(f"Unknown opcode: {opcode}")
+                # 处理分支等特殊指令
+                self.execute_branch(node, opcode)
+
+            # 3. 处理噪声应用逻辑 (关键点)
+            if is_quantum_gate:
+                # 检查下一条指令是否是 ERR
+                next_pc = self.env.pc + 1
+                has_local_err = False
+                if next_pc < len(self.body_instructions):
+                    next_node = self.body_instructions[next_pc]
+                    next_opcode = next(c for c in next_node.children if c.type == 'Opcode').value
+                    if next_opcode == 'ERR':
+                        has_local_err = True
+
+                if has_local_err:
+                    # 如果有 ERR，则跳过当前的全局噪声，执行 ERR 指令应用局部噪声
+                    self.env.pc += 1  # 推进 PC 到 ERR 指令
+                    self.execute_err(self.body_instructions[self.env.pc])
+                else:
+                    # 如果没有 ERR，应用当前的全局噪声
+                    qubits = self._get_affected_qubits(node)
+                    if self.env.error_model:
+                        self.env.apply_quantum_noise(qubits)
+
+            # 4. 指令执行完毕，PC自增 (如果指令没自己改PC)
+            # 如果上面执行了 ERR，PC 已经加过
             # 在量子操作后应用噪声
             # if opcode in ['CNOT', 'U3']:
             # qubits = self._get_affected_qubits(node)
@@ -530,50 +566,55 @@ class Evaluator:
             # elif opcode in {'ADD', 'SUB', 'MUL', 'DIV', 'U3', 'CNOT', 'reset', 'measure', 'barrier', 'debug',
             # 'debug-p'}:
             # self.env.pc += 1
-    @staticmethod
-    def _get_affected_qubits(instr_node):
-        """从 Instruction 节点提取受影响的量子位"""
-        # 先找到 Opcode 子节点
-        opcode_node = next((c for c in instr_node.children if c.type == 'Opcode'), None)
-        if not opcode_node:
-            return []
-        opcode = opcode_node.value
-        # 找到 Operands 子节点
-        operands_node = next((c for c in instr_node.children if c.type == 'Operands'), None)
-        if not operands_node:
-            return []
-        children = operands_node.children
-        if opcode == 'CNOT':
-            if len(children) < 2:
-                return []
-            # 假设格式 q[control], q[target]
-            control_str = children[0].value
-            target_str = children[1].value
-            try:
-                control = int(control_str[2:-1])
-                target = int(target_str[2:-1])
-                return [control, target]
-            except:
-                return []
-        elif opcode in ['U3', 'measure', 'reset']:
-            # 最后一个操作数是量子位
-            if not children:
-                return []
-            qubit_str = children[-1].value
-            try:
-                qubit = int(qubit_str[2:-1])
-                return [qubit]
-            except:
-                return []
-        return []
+
+    def execute_err(self, node):
+        """
+        执行局部误差指令：ERR(model, code, p1, p2, p3) q[n];
+        """
+        operands_node = next(c for c in node.children if c.type == 'Operands')
+        ops = operands_node.children
+
+        # 解析参数 (按照 Parser 定义的展平结构)
+        # 格式：[model, code, p1, p2, p3, ..., qreg1, qreg2...]
+        model_type = int(ops[0].value)
+        # 找到量子寄存器的起始位置
+        q_start_idx = 0
+        for i, op in enumerate(ops):
+            if op.value.startswith('q['):
+                q_start_idx = i
+                break
+
+        # 提取物理参数
+        params = [float(op.value) for op in ops[2:q_start_idx]]
+        # 提取目标量子位
+        target_qubits = [self._parse_register_index(op.value, 'q') for op in ops[q_start_idx:]]
+
+        # 应用局部噪声
+        self.env.convert_to_density()
+        for qubit in target_qubits:
+            # 调用 Environment 中已经实现的 Kraus 生成逻辑
+            kraus_ops = self.env.generate_kraus_operators(model_type, qubit, params)
+
+            new_rho = np.zeros_like(self.env.quantum_state, dtype=np.complex128)
+            for k in kraus_ops:
+                new_rho += k @ self.env.quantum_state @ k.conj().T
+
+            trace = np.real(np.trace(new_rho))
+            self.env.density_matrix = new_rho / trace if trace > 1e-15 else new_rho
+            self.env.quantum_state = self.env.density_matrix
+
     def execute_shot(self, node):
         pass
+
     def execute_error(self, instruction_node):
-        # 从Instruction节点中获取Operands
+        # 1. 提取 Operands 子节点
         operands_node = next((c for c in instruction_node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
             raise ValueError("error instruction requires at least the enable parameter")
+
         operands = operands_node.children
+
+        # 2. 处理第一个参数：Enable/Disable
         enable_str = operands[0].value
         if enable_str in ['TRUE', '1']:
             enable = True
@@ -581,49 +622,93 @@ class Evaluator:
             enable = False
         else:
             raise ValueError("First parameter must be TRUE/FALSE or 1/0")
+
+        # 如果关闭错误模型，直接返回
         if not enable:
             self.env.error_model = None
             if hasattr(self.env, '_pending_error_model'):
                 del self.env._pending_error_model
             return
+
+        # 3. 处理第二个参数：Error Code
         code = config.default_Q_error_Code if len(operands) < 2 else int(operands[1].value)
-        p1 = config.default_Q1_error_Probability if len(operands) < 3 else float(operands[2].value)
-        p2 = config.default_Q2_error_Probability if len(operands) < 4 else float(operands[3].value)
-        p_measure = config.default_measure_error_Probability if len(operands) < 5 else float(operands[4].value)
-        p_reset = config.default_reset_error_Probability if len(operands) < 6 else float(operands[5].value)
-        self.env.error_model = (code, p1, p2, p_measure, p_reset)
-        print(f"Error model set: code={code}, p1={p1}, p2={p2}, p_measure={p_measure}, p_reset={p_reset}")
+
+        # 4. 根据 Code 解析后续参数
+        if code == 1:
+            # --- 去极化误差逻辑 ---
+            # 参数顺序: enable, code, p1, p2, p_measure, p_reset
+            p1 = float(operands[2].value) if len(operands) > 2 else config.default_Q1_error_Probability
+            p2 = float(operands[3].value) if len(operands) > 3 else config.default_Q2_error_Probability
+            p_measure = float(operands[4].value) if len(operands) > 4 else config.default_measure_error_Probability
+            p_reset = float(operands[5].value) if len(operands) > 5 else config.default_reset_error_Probability
+            self.env.error_model = (code, p1, p2, p_measure, p_reset)
+
+        elif code in [2, 3]:
+            # --- 幅度(2)或相位(3)衰减误差逻辑 ---
+            # 参数顺序: enable, code, gamma, p_measure, p_reset
+            # 根据 code 选择 config 中的默认 gamma
+            default_gamma = config.default_amp_damping_gamma if code == 2 else config.default_phase_damping_gamma
+
+            # 第三个参数是 gamma
+            gamma = float(operands[2].value) if len(operands) > 2 else default_gamma
+            # 第四个参数是测量误差 (原本是第五个)
+            p_measure = float(operands[3].value) if len(operands) > 3 else config.default_measure_error_Probability
+            # 第五个参数是重置误差 (原本是第六个)
+            p_reset = float(operands[4].value) if len(operands) > 4 else config.default_reset_error_Probability
+            self.env.error_model = (code, gamma, gamma, p_measure, p_reset)
+        elif code == 4:  # Thermal Relaxation
+            # 指令格式: error TRUE, 4, T1, T2, Tgate, p_measure, p_reset
+            t1 = float(operands[2].value) if len(operands) > 2 else config.default_thermal_relaxation_error_T1
+            t2 = float(operands[3].value) if len(operands) > 3 else config.default_thermal_relaxation_error_T2
+            tg = float(operands[4].value) if len(operands) > 4 else config.default_thermal_relaxation_error_Tgate
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            self.env.error_model = (code, [t1, t2, tg], [t1, t2, tg], p_measure, p_reset)
+        elif code == 5:  # Pauli Error
+            # 指令格式: error TRUE, 5, px, py, pz, p_measure, p_reset
+            px = float(operands[2].value) if len(operands) > 2 else config.default_pauli_X_error_Probability
+            py = float(operands[3].value) if len(operands) > 3 else config.default_pauli_Y_error_Probability
+            pz = float(operands[4].value) if len(operands) > 4 else config.default_pauli_Z_error_Probability
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            self.env.error_model = (code, [px, py, pz], [px, py, pz], p_measure, p_reset)
+        elif code == 6:  # Coherent Error
+            # 指令格式: error TRUE, 6, ex, ey, ez, p_measure, p_reset
+            ex = float(operands[2].value) if len(operands) > 2 else config.default_coherent_X_unitary_error_Probability
+            ey = float(operands[3].value) if len(operands) > 3 else config.default_coherent_Y_unitary_error_Probability
+            ez = float(operands[4].value) if len(operands) > 4 else config.default_coherent_Z_unitary_error_Probability
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            self.env.error_model = (code, [ex, ey, ez], [ex, ey, ez], p_measure, p_reset)
+
+        else:
+            # 其他 Code 逻辑（暂按默认处理）
+            p1 = config.default_Q1_error_Probability
+            p2 = config.default_Q2_error_Probability
+            p_measure = config.default_measure_error_Probability
+            p_reset = config.default_reset_error_Probability
+            self.env.error_model = (code, p1, p2, p_measure, p_reset)
+
+        # 处理延迟应用逻辑
         if hasattr(self.env, '_pending_error_model'):
             self.env._pending_error_model = self.env.error_model
+        # print(f"Error model updated: code={code}, p1={p1}, p2={p2}, p_m={p_measure}, p_r={p_reset}")
     def execute_qreg(self, node):
-        # 获取Operands子节点（关键修正）
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or not operands_node.children:
-            raise ValueError("qreg instruction missing operands")
-        # 从第一个操作数提取字符串
         operand_str = operands_node.children[0].value
-        # 解析寄存器大小
-        left = operand_str.find('[')
-        right = operand_str.find(']')
-        if left == -1 or right == -1 or right <= left:
-            raise ValueError(f"Invalid qreg format: {operand_str}")
+        left, right = operand_str.find('['), operand_str.find(']')
         qreg_size = int(operand_str[left + 1:right])
         self.env.resize_qreg(qreg_size)
+        print(f"Quantum Register Number: {qreg_size}")
     def execute_creg(self, node):
-        # 获取Operands子节点
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or not operands_node.children:
-            raise ValueError("creg instruction missing operands")
-        # 从第一个操作数提取字符串
         operand_str = operands_node.children[0].value
-        # 解析寄存器大小
-        left = operand_str.find('[')
-        right = operand_str.find(']')
-        if left == -1 or right == -1 or right <= left:
-            raise ValueError(f"Invalid creg format: {operand_str}")
+        left, right = operand_str.find('['), operand_str.find(']')
         creg_size = int(operand_str[left + 1:right])
         self.env._initial_creg = np.zeros(creg_size, dtype=np.complex128)
         self.env.creg = self.env._initial_creg.copy()
+        # 匹配 C 语言 613 行
+        print(f"Classical Register Number: {creg_size}")
     def execute_mov(self, node):
         """
         执行 MOV 指令，支持：
@@ -697,7 +782,7 @@ class Evaluator:
             if src_type == 'imm' and src_val == 0:
                 # 特殊语义：结束当前 shot
                 self.env.shot_completed = True
-                print("MOV PC,0 detected → marking current shot as completed")
+                # print("MOV PC,0 detected → marking current shot as completed")
                 return
             else:
                 # 跳转到 PC
@@ -707,13 +792,13 @@ class Evaluator:
                     self.env.pc = int(src_val)
                 elif src_type == 'LR':
                     self.env.pc = self.env.lr
-                    print(f"MOV PC, LR → jumping to {self.env.pc} (LR value is {self.env.lr})")
+                    # print(f"MOV PC, LR → jumping to {self.env.pc} (LR value is {self.env.lr})")
                 elif src_type in {'SF', 'ZF'}:
                     raise ValueError("Cannot MOV SF/ZF directly to PC")
                 else:
                     raise ValueError(f"Unsupported src → PC: {src_type}")
                 new_pc = self.env.pc
-                print(f"PC ← {src_str} (value={new_pc}, old_pc was {old_pc}, LR={self.env.lr})")
+                # print(f"PC ← {src_str} (value={new_pc}, old_pc was {old_pc}, LR={self.env.lr})")
                 # PC 变更不更新标志位
         elif dest_type == 'LR':
             # 设置链接寄存器
@@ -752,8 +837,8 @@ class Evaluator:
             self.env.ZF = 1 if val == 0 else 0
         else:
             raise ValueError(f"Unsupported destination type: {dest_type}")
-        # 调试输出（可选）
-        print(f"MOV {dest_str} <- {src_str} completed.")
+        # 调试输出
+        # print(f"MOV {dest_str} <- {src_str} completed.")
     def execute_u3(self, node):
         # 1. 解析参数
         theta = self._parse_parameter(node.children[1].children[0], 'R')
@@ -768,10 +853,7 @@ class Evaluator:
         # 3. 应用门
         full_u = self.env.get_full_operator(u_gate, qubit)
         self.env.apply_unitary(full_u)
-        # 4. 应用噪声 (如果开启)
-        if self.env.error_model:
-            p1 = self.env.error_model[1]
-            self.env.apply_depolarizing_error(qubit, p1)
+
     def execute_cnot(self, node):
         control = self._parse_register_index(node.children[1].children[0].value, 'q')
         target = self._parse_register_index(node.children[1].children[1].value, 'q')
@@ -792,11 +874,7 @@ class Evaluator:
             op1 = np.kron(op1, gate1)
         full_cnot = op0 + op1
         self.env.apply_unitary(full_cnot)
-        # 匹配 C 语言逻辑：CNOT 后对 control 和 target 分别应用 error
-        if self.env.error_model:
-            p2 = self.env.error_model[2]
-            self.env.apply_depolarizing_error(control, p2)
-            self.env.apply_depolarizing_error(target, p2)
+
     def execute_gps(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
@@ -811,20 +889,6 @@ class Evaluator:
             self.env.quantum_state *= phase
         else:
             self.env.quantum_state = phase * self.env.quantum_state * phase.conj()
-        # 应用噪声模型
-        if self.env.error_model:
-            self.env.apply_quantum_noise([])
-    # 辅助方法 ---------------------------------------------------
-    def _parse_parameter(self, operand_node, register_prefix):
-        """解析混合参数（立即数/寄存器）"""
-        value_str = operand_node.value
-        try:
-            # 尝试解析为立即数
-            return float(value_str)
-        except ValueError:
-            # 解析为寄存器值
-            reg_index = self._parse_register_index(value_str, register_prefix)
-            return self.env.registers[reg_index]
 
     def execute_measure(self, node):
         operands = next(c for c in node.children if c.type == 'Operands').children
@@ -880,6 +944,56 @@ class Evaluator:
         self._execute_binary_arithmetic(node, 'mul')
     def execute_div(self, node):
         self._execute_binary_arithmetic(node, 'div')
+
+    # 辅助方法 ---------------------------------------------------
+    @staticmethod
+    def _get_affected_qubits(instr_node):
+        """从 Instruction 节点提取受影响的量子位"""
+        # 先找到 Opcode 子节点
+        opcode_node = next((c for c in instr_node.children if c.type == 'Opcode'), None)
+        if not opcode_node:
+            return []
+        opcode = opcode_node.value
+        # 找到 Operands 子节点
+        operands_node = next((c for c in instr_node.children if c.type == 'Operands'), None)
+        if not operands_node:
+            return []
+        children = operands_node.children
+        if opcode == 'CNOT':
+            if len(children) < 2:
+                return []
+            # 假设格式 q[control], q[target]
+            control_str = children[0].value
+            target_str = children[1].value
+            try:
+                control = int(control_str[2:-1])
+                target = int(target_str[2:-1])
+                return [control, target]
+            except:
+                return []
+        elif opcode in ['U3', 'measure', 'reset']:
+            # 最后一个操作数是量子位
+            if not children:
+                return []
+            qubit_str = children[-1].value
+            try:
+                qubit = int(qubit_str[2:-1])
+                return [qubit]
+            except:
+                return []
+        return []
+
+    def _parse_parameter(self, operand_node, register_prefix):
+        """解析混合参数（立即数/寄存器）"""
+        value_str = operand_node.value
+        try:
+            # 尝试解析为立即数
+            return float(value_str)
+        except ValueError:
+            # 解析为寄存器值
+            reg_index = self._parse_register_index(value_str, register_prefix)
+            return self.env.registers[reg_index]
+
     # 通用寄存器解析方法
     def _parse_register_index(self, reg_str, prefix):
         # 对偏移量的支持
@@ -906,13 +1020,13 @@ class Evaluator:
         return index
     def _execute_binary_arithmetic(self, node, operation):
         operands = node.children[1].children
-        print(f"[{operation.upper()}] raw operands: {[op.value for op in operands]}")
+        # print(f"[{operation.upper()}] raw operands: {[op.value for op in operands]}")
         if len(operands) < 3:
             raise ValueError(f"{operation.upper()} needs 3 operands")
         dest_idx = self._parse_register_index(operands[0].value, 'R')
         src1_parsed = self._parse_operand(operands[1].value)
         src2_parsed = self._parse_operand(operands[2].value)
-        print(f"dest: {dest_idx}, src1_parsed: {src1_parsed}, src2_parsed: {src2_parsed}")
+        # print(f"dest: {dest_idx}, src1_parsed: {src1_parsed}, src2_parsed: {src2_parsed}")
         if isinstance(src1_parsed, int) and operands[1].value.startswith('R['):
             val1 = self.env.registers[src1_parsed]
         else:
@@ -921,7 +1035,7 @@ class Evaluator:
             val2 = self.env.registers[src2_parsed]
         else:
             val2 = float(src2_parsed)
-        print(f"values → val1={val1} (from R{src1_parsed}), val2={val2} (from R{src2_parsed})")
+        # print(f"values → val1={val1} (from R{src1_parsed}), val2={val2} (from R{src2_parsed})")
         if operation == 'add':
             result = val1 + val2
         elif operation == 'sub':
@@ -968,42 +1082,16 @@ class Evaluator:
             return
         if opcode == 'BNE':
             if self._condition_met('NE'):
-                print(f" → branch taken to {label} @ {self.labels[label]}")
+                # print(f" → branch taken to {label} @ {self.labels[label]}")
+                pass
             else:
-                print(" → branch NOT taken (ZF==1)")
+                # print(" → branch NOT taken (ZF==1)")
+                pass
         # 条件分支
         if self._condition_met(opcode[1:]): # BEQ → 'EQ', BNE → 'NE' 等
             self.env.pc = self._get_label_address(label)
         # 不跳转时 → 外层 +1
-    # 辅助方法 ---------------------------------------------------
-    @staticmethod
-    def _parse_label_operand(node):
-        """从分支指令节点解析标签操作数"""
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or not operands_node.children:
-            raise ValueError(f"{node.children[0].value} instruction missing label operand")
-        label_operand = operands_node.children[0]
-        if label_operand.type != 'Label':
-            raise ValueError(f"Expected label operand, got {label_operand.type}")
-        return label_operand.value.strip(':') # 去除可能存在的冒号
-    def _get_label_address(self, label):
-        label = label.strip(':')
-        if label not in self.labels:
-            raise ValueError(f"Undefined label: {label}")
-        return self.labels[label]
-    # 条件检查方法 -----------------------------------------------
-    def _condition_met(self, condition_type):
-        """通用条件检查方法"""
-        sf, zf = self.env.SF, self.env.ZF
-        conditions = {
-            'EQ': lambda: zf == 1,
-            'NE': lambda: zf == 0,
-            'GT': lambda: sf == 0 and zf == 0,
-            'GE': lambda: sf == 0 or zf == 1,
-            'LT': lambda: sf == 1 and zf == 0,
-            'LE': lambda: sf == 1 or zf == 1
-        }
-        return conditions.get(condition_type, lambda: False)()
+
     def execute_ldr(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
@@ -1053,6 +1141,36 @@ class Evaluator:
         self.env.memory[imag_mem] = complex_val.imag
     # 辅助方法 ---------------------------------------------------
     @staticmethod
+    def _parse_label_operand(node):
+        """从分支指令节点解析标签操作数"""
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if not operands_node or not operands_node.children:
+            raise ValueError(f"{node.children[0].value} instruction missing label operand")
+        label_operand = operands_node.children[0]
+        if label_operand.type != 'Label':
+            raise ValueError(f"Expected label operand, got {label_operand.type}")
+        return label_operand.value.strip(':') # 去除可能存在的冒号
+    def _get_label_address(self, label):
+        label = label.strip(':')
+        if label not in self.labels:
+            raise ValueError(f"Undefined label: {label}")
+        return self.labels[label]
+    # 条件检查方法 -----------------------------------------------
+    def _condition_met(self, condition_type):
+        """通用条件检查方法"""
+        sf, zf = self.env.SF, self.env.ZF
+        conditions = {
+            'EQ': lambda: zf == 1,
+            'NE': lambda: zf == 0,
+            'GT': lambda: sf == 0 and zf == 0,
+            'GE': lambda: sf == 0 or zf == 1,
+            'LT': lambda: sf == 1 and zf == 0,
+            'LE': lambda: sf == 1 or zf == 1
+        }
+        return conditions.get(condition_type, lambda: False)()
+
+    # 辅助方法 ---------------------------------------------------
+    @staticmethod
     def _parse_memory_address(addr_str):
         """解析内存地址格式 M[数字] 或 M[基址+偏移]"""
         if not addr_str.startswith('M'):
@@ -1083,7 +1201,7 @@ class Evaluator:
             code, p1, p2, p_measure, p_reset_val = self.env.error_model
             if code == 8:
                 p_reset = p1 # C 语言中 reset 使用的是 Q1_error_Probability
-        print(f"Executing Physical Reset on q[{qubit}] with p={p_reset}")
+        # print(f"Executing Physical Reset on q[{qubit}] with p={p_reset}")
         self.env.apply_physical_reset(qubit, p_reset)
     def execute_barrier(self, node):
         # No-op in this simulation
@@ -1186,7 +1304,8 @@ class Evaluator:
             f.write(struct.pack('I', self.env.qreg_size))
         # 标记初始化完成
         self._debug_file_initialized = True
-    def _write_matrix_to_text(self, f, matrix):
+    @staticmethod
+    def _write_matrix_to_text(f, matrix):
         rows, cols = matrix.shape
         f.write(f"\nmatrix rows:{rows}, matrix columns:{cols}:\n")
         for i in range(rows):
@@ -1194,7 +1313,8 @@ class Evaluator:
                 val = matrix[i, j]
                 f.write(f"[{i}][{j}]:({val.real:.6f})+({val.imag:.6f})i\n")
         f.write("\n")
-    def _write_vector_to_text(self, f, vector):
+    @staticmethod
+    def _write_vector_to_text(f, vector):
         length = len(vector)
         f.write(f"\nvector length:{length}:\n")
         for i in range(length):
@@ -1213,3 +1333,19 @@ class Evaluator:
         for idx, val in enumerate(self.env.memory):
             f.write(f"M[{idx:4d}]={val:15.10f}\n")
         f.write("\n\n")
+
+    def _print_complete_measure_info(self, state_vec):
+        """格式化输出测量概率和对应的分量矩阵"""
+        print("\nXQI Success: Complete Measure Event Information:\n")
+        dim = len(state_vec)
+        q_size = self.env.qreg_size
+        for i in range(dim):
+            prob = np.abs(state_vec[i])**2
+            bin_str = format(i, f'0{q_size}b')
+            print(f"state:        {bin_str}: probability={prob:.6f}")
+            print(f"resultant measure state:")
+            print(f"matrix rows:{dim}, matrix columns:1:")
+            for j in range(dim):
+                val = state_vec[j] if i == j else 0.0j
+                print(f"[{j}][0]:({val.real:.6f})+({val.imag:.6f})i")
+            print()

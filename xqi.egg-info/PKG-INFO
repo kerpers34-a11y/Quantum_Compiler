@@ -13,5 +13,6 @@ Requires-Dist: pyvim<4.0,>=3.0
 Requires-Dist: Pygments<3.0,>=2.18
 Requires-Dist: scipy<2.0,>=1.14
 Requires-Dist: wcwidth<1.0,>=0.2
+Requires-Dist: pyperclip==1.11.0
 Dynamic: author
 Dynamic: requires-python

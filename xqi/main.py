@@ -3,12 +3,11 @@ import time
 import shutil
 import subprocess
 
-# from pygments.lexer import Lexer
-
 from prompt_toolkit import print_formatted_text, HTML
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
 
 from xqi.xqi_lexer import XQILexer
 from xqi.parser import Parser
@@ -20,6 +19,22 @@ bindings = KeyBindings()
 @bindings.add('c-c')
 def _(event):
     event.app.exit()
+@bindings.add('c-v')
+def _(event):
+    """
+    强制从系统剪贴板读取内容并插入到当前光标位置
+    """
+    # 尝试获取剪贴板内容
+    data = event.app.clipboard.get_data()
+    if data.text:
+        event.current_buffer.insert_text(data.text)
+    else:
+        import subprocess
+        try:
+            text = subprocess.check_output(['powershell', '-command', 'Get-Clipboard'], encoding='utf-8')
+            event.current_buffer.insert_text(text.strip())
+        except:
+            pass
 
 ###################################################################################
 ###################################################################################
@@ -58,63 +73,51 @@ def write_debug_to_debug_file(_lexer):
 ###################################################################################
 ###################################################################################
 
-def handle_multi_line_input(session):
-    """多行输入处理"""
-    print_formatted_text(HTML('<cg>进入多行模式（输入XQI-END或按CTRL+D退出）</cg>'), style=style_html)
-    multi_lines = []
+def handle_multi_line_input(initial_text=""):
+    """
+    交互式多行输入模式。使用独立的 Session 避免 UI 污染。
+    """
+    print_formatted_text(HTML('<cg>进入程序编辑模式（在 XQI-END 后回车将执行并退出）</cg>'), style=style_html)
 
-    # 提示符函数
-
-    def get_prompt(width=0, line_number=0, wrap_count=0):
-        return HTML('<ansiyellow>│</ansiyellow> ')
-
-        # 键绑定
     multi_bindings = KeyBindings()
-    @ multi_bindings.add('c-d')
-    def _(event):
-        """退出多行输入"""
-        buffer = event.app.current_buffer
-        if buffer.text.strip():  # 如果当前缓冲区有内容
-            multi_lines.append(buffer.text)  # 保存缓冲区内容
-        event.app.exit(result=False)  # 退出多行模式
 
-    def collect_input(event):
-        """每次用户输入时保存当前行"""
-        buffer = event.app.current_buffer
-        # 获取当前缓冲区的所有行
-        lines = buffer.text.splitlines()  # 将缓冲区内容按行切割
-        if lines:
-            current_line = lines[-1].strip()  # 仅收集当前输入行（最新的那一行）
-            if current_line:
-                multi_lines.append(current_line)  # 将当前行保存到 multi_lines 列表中
-            # 检查当前行是否为 'XQI-END'，如果是，则退出多行模式
-            if current_line == 'XQI-END':
-                event.app.exit(result=False)  # 退出多行模式
-
-    # 保持默认回车行为的同时，继续收集输入
     @multi_bindings.add('enter')
     def _(event):
-        collect_input(event)  # 保存当前输入
-        event.app.current_buffer.insert_text('\n')
+        buffer = event.app.current_buffer
+        lines = buffer.text.split('\n')
+        # 判定最后一行是否为结束符
+        if lines and lines[-1].strip().upper() == 'XQI-END':
+            event.app.exit(result=buffer.text)
+        else:
+            buffer.insert_text('\n')
+
+    @multi_bindings.add('c-d')
+    def _(event):
+        event.app.exit(result=event.app.current_buffer.text)
+
+    @multi_bindings.add('c-v')
+    def _(event):
+        data = event.app.clipboard.get_data()
+        event.current_buffer.insert_text(data.text)
+
+    # 创建一个临时 Session
+    temp_session = PromptSession(
+        message=HTML('<ansiyellow>│</ansiyellow> '),
+        prompt_continuation=HTML('<ansiyellow>│</ansiyellow> '),
+        style=style_prompt,
+        lexer=xqiasm_lexer,
+        completer=opcode_completer,
+        key_bindings=multi_bindings,
+        multiline=True,
+        clipboard=PyperclipClipboard()
+    )
 
     try:
-        # 仅调用一次 session.prompt 来接收多行输入
-        session.prompt(
-            message=get_prompt(),
-            prompt_continuation=get_prompt,
-            multiline=True,
-            key_bindings=multi_bindings,
-            vi_mode=False
-        )
-
-        return '\n'.join(multi_lines)
-
+        result = temp_session.prompt(default=initial_text)
+        return result
     except KeyboardInterrupt:
-        print_formatted_text(HTML('<cy>输入已中断</cy>'), style=style_html)
         return None
-    except Exception as e:
-        print_formatted_text(HTML(f'<cr>输入错误：</cr><cy2>{str(e)}<cy2>'), style=style_html)
-        return None
+
 
 
 def ensure_xqi_tags(content):
@@ -221,156 +224,166 @@ def main():
     print_formatted_text(HTML('<cg>XQI Shell is running...(按 ctrl+c 退出)</cg>'), style=style_html)
     time.sleep(0.8)
 
+    system_clipboard = PyperclipClipboard()
+
+    session = PromptSession(
+        message_prompt,
+        key_bindings=bindings,
+        style=style_prompt,
+        lexer=xqiasm_lexer,
+        completer=opcode_completer,
+        clipboard=PyperclipClipboard(),
+        multiline=False,
+        cursor=CursorShape.BLINKING_BEAM,
+        auto_suggest=CustomAutoSuggest(),
+        wrap_lines=True,
+    )
+
     while True:
         try:
-            session = PromptSession(
-                message_prompt,
-                key_bindings=bindings,
-                style=style_prompt,
-                lexer=xqiasm_lexer,
-                completer=opcode_completer,
-                cursor=CursorShape.BLINKING_BEAM,
-                auto_suggest=CustomAutoSuggest(),
-                multiline=False,
-                wrap_lines=True,
-                enable_open_in_editor=True
-            )
-            user_input = session.prompt()
+            # 1. 获取输入
+            raw_input = session.prompt()
 
-            if user_input is None:  # 处理直接按Ctrl+C的情况
-                break
+            if raw_input is None: break
+            if not raw_input.strip(): continue
 
-            # 命令分发逻辑
-            if user_input.strip() == 'ls':
-                items = os.listdir(".")
-                if items:
-                    formatted = []
-                    for item in items:
-                        if os.path.isdir(item):
-                            formatted.append(f"<cbg>{item}/</cbg>")  # 文件夹加斜杠
-                        elif item.lower().endswith((".xqiasm", ".txt")):
-                            formatted.append(f"<cg>{item}</cg>")
-                    if formatted:
-                        print_formatted_text(HTML(" ".join(formatted)), style=style_html)
-                    else:
-                        print_formatted_text(HTML('<cr>未找到匹配文件或文件夹</cr>'), style=style_html)
+            # 2. 预处理：判定是否包含代码块标记
+            # 无论是首行还是中间包含，只要有 XQI-BEGIN 就启动代码块处理
+            full_input_upper = raw_input.upper()
+
+            if 'XQI-BEGIN' in full_input_upper:
+                # 情况 A：已经是完整的块（包含 BEGIN 和 END）
+                if 'XQI-END' in full_input_upper:
+                    print_formatted_text(HTML('<cg>检测到完整程序块，执行中...</cg>'), style=style_html)
+                    main_progress(raw_input)
                 else:
-                    print_formatted_text(HTML('<cr>当前目录为空</cr>'), style=style_html)
+                    # 情况 B：只有 BEGIN，进入交互式多行模式
+                    # 补齐换行，带入已输入内容
+                    init_val = raw_input + ('\n' if not raw_input.endswith('\n') else '')
+                    content = handle_multi_line_input(initial_text=init_val)
+                    if content:
+                        main_progress(content)
 
+                # 执行完程序块后，强制跳过本次循环剩余逻辑，回到 shell 顶层
+                print("")  # 打印空行，分隔输出与下一个 Prompt
+                continue
 
-            elif user_input.strip() == 'XQI-BEGIN':
+            # 3. 常规指令模式 (只有不含 XQI-BEGIN 时才进入逐行解析)
+            raw_lines = raw_input.split('\n')
+            for current_line in raw_lines:
+                user_input = current_line.strip()
+                if not user_input: continue
+                # 指令分发逻辑
+                if user_input == 'ls':
+                    items = os.listdir(".")
+                    formatted = [f"<cbg>{i}/</cbg>" if os.path.isdir(i) else f"<cg>{i}</cg>"
+                                 for i in items if os.path.isdir(i) or i.lower().endswith((".xqiasm", ".txt"))]
+                    if formatted: print_formatted_text(HTML(" ".join(formatted)), style=style_html)
 
-                content = handle_multi_line_input(session)
+                elif user_input == 'XQI-BEGIN':
+                    # 这种情况属于手动输入 XQI-BEGIN，直接进入多行模式
+                    content = handle_multi_line_input(initial_text="XQI-BEGIN\n")
+                    if content: main_progress(content)
 
-                if content:
-                    processed_content = ensure_xqi_tags(content)
-                    saved_file = textprocessing_funs.save_xqi_file(processed_content)
-                    print_formatted_text(HTML(f'<cg>程序已保存至：</cg><cy2>./{saved_file}</cy2>'), style=style_html)
-                    print_formatted_text(HTML(f'<cg>自动执行: </cg><cy2>./{saved_file}</cy2>'), style=style_html)
-                    user_input = processed_content
-                    main_progress(user_input)
-                    print('5')
-                else:
-                    print_formatted_text(HTML('<cr>未保存内容，返回单行模式</cr>'), style=style_html)
+                elif user_input.startswith('./') and user_input.endswith('.XQIASM'):
+                    content, filepath = handle_file_execution(user_input[2:])
+                    if content: main_progress(content)
+                elif '\n' in user_input:
+                    filename = f"XQI_PASTED_{time.strftime('%Y%m%d_%H%M%S')}.XQIASM"
+                    with open(filename, 'w', encoding='utf-8') as f:
+                        f.write(user_input)
 
-            elif user_input.startswith('./') and user_input.endswith('.XQIASM'):
-                content, filepath = handle_file_execution(user_input[2:])
-                user_input = content
-                if content:
-                    user_input = content
-                    print_formatted_text(HTML(f'<cg>已加载文件：</cg><ivory>{user_input[0:]}</ivory>'), style=style_html)
-                    print_formatted_text(HTML(f'<cg>等待执行...</cg>'), style=style_html)
-                    main_progress(user_input)
+                    print_formatted_text(HTML(f'<cg>粘贴内容已保存：</cg><cy2>./{filename}</cy2>'), style=style_html)
 
-            elif '\n' in user_input:
-                filename = f"XQI_PASTED_{time.strftime('%Y%m%d_%H%M%S')}.XQIASM"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(user_input)
-
-                print_formatted_text(HTML(f'<cg>粘贴内容已保存：</cg><cy2>./{filename}</cy2>'), style=style_html)
-
-            elif user_input.strip().startswith('mkdir '):
-                # 创建文件夹
-                folder_name = user_input.strip().split(' ', 1)[1]
-                try:
-                    os.makedirs(folder_name, exist_ok=True)
-                    print_formatted_text(HTML(f'<cg>文件夹已创建：</cg><cy2>{folder_name}</cy2>'), style=style_html)
-                except Exception as e:
-                    print_formatted_text(HTML(f'<cr>创建失败：{str(e)}</cr>'), style=style_html)
-
-            elif user_input.strip().startswith('rm '):
-                # 删除文件或文件夹
-                target = user_input.strip().split(' ', 1)[1]
-                try:
-                    if os.path.isdir(target):
-                        shutil.rmtree(target)
-                        print_formatted_text(HTML(f'<cg>文件夹已删除：</cg><cy2>{target}</cy2>'), style=style_html)
-                    elif os.path.isfile(target):
-                        os.remove(target)
-                        print_formatted_text(HTML(f'<cg>文件已删除：</cg><cy2>{target}</cy2>'), style=style_html)
-                    else:
-                        print_formatted_text(HTML(f'<cr>未找到目标：</cr><cy2>{target}</cy2>'), style=style_html)
-                except Exception as e:
-                    print_formatted_text(HTML(f'<cr>删除失败：{str(e)}</cr>'), style=style_html)
-
-            elif user_input.strip().startswith('cat '):
-                # 查看文件内容
-                filename = user_input.strip().split(' ', 1)[1]
-                try:
-                    with open(filename, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
-                except Exception as e:
-                    print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
-
-            elif user_input.strip().startswith('mv '):
-                # 移动或重命名文件
-                parts = user_input.strip().split(' ')
-                if len(parts) == 3:
-                    src, dst = parts[1], parts[2]
+                elif user_input.startswith('mkdir '):
+                    # 创建文件夹
+                    folder_name = user_input.split(' ', 1)[1]
                     try:
-                        shutil.move(src, dst)
-                        print_formatted_text(HTML(f'<cg>已移动/重命名：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
+                        os.makedirs(folder_name, exist_ok=True)
+                        print_formatted_text(HTML(f'<cg>文件夹已创建：</cg><cy2>{folder_name}</cy2>'),
+                                             style=style_html)
                     except Exception as e:
-                        print_formatted_text(HTML(f'<cr>操作失败：{str(e)}</cr>'), style=style_html)
-                else:
-                    print_formatted_text(HTML('<cr>用法错误：mv 源文件 目标文件</cr>'), style=style_html)
+                        print_formatted_text(HTML(f'<cr>创建失败：{str(e)}</cr>'), style=style_html)
 
-            elif user_input.strip().startswith('cp '):
-                # 复制文件
-                parts = user_input.strip().split(' ')
-                if len(parts) == 3:
-                    src, dst = parts[1], parts[2]
+                elif user_input.startswith('rm '):
+                    # 删除文件或文件夹
+                    target = user_input.split(' ', 1)[1]
                     try:
-                        if os.path.isdir(src):
-                            shutil.copytree(src, dst)
+                        if os.path.isdir(target):
+                            shutil.rmtree(target)
+                            print_formatted_text(HTML(f'<cg>文件夹已删除：</cg><cy2>{target}</cy2>'),
+                                                 style=style_html)
+                        elif os.path.isfile(target):
+                            os.remove(target)
+                            print_formatted_text(HTML(f'<cg>文件已删除：</cg><cy2>{target}</cy2>'), style=style_html)
                         else:
-                            shutil.copy2(src, dst)
-                        print_formatted_text(HTML(f'<cg>已复制：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
+                            print_formatted_text(HTML(f'<cr>未找到目标：</cr><cy2>{target}</cy2>'), style=style_html)
                     except Exception as e:
-                        print_formatted_text(HTML(f'<cr>复制失败：{str(e)}</cr>'), style=style_html)
-                else:
-                    print_formatted_text(HTML('<cr>用法错误：cp 源文件 目标文件</cr>'), style=style_html)
+                        print_formatted_text(HTML(f'<cr>删除失败：{str(e)}</cr>'), style=style_html)
 
-            elif user_input.strip().startswith('cat '):
-                filename = user_input.strip().split(' ', 1)[1]
-                view_text_file(filename)
+                elif user_input.startswith('cat '):
+                    # 查看文件内容
+                    filename = user_input.split(' ', 1)[1]
+                    try:
+                        with open(filename, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
+                    except Exception as e:
+                        print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
+
+                elif user_input.startswith('mv '):
+                    # 移动或重命名文件
+                    parts = user_input.split(' ')
+                    if len(parts) == 3:
+                        src, dst = parts[1], parts[2]
+                        try:
+                            shutil.move(src, dst)
+                            print_formatted_text(HTML(f'<cg>已移动/重命名：</cg><cy2>{src} → {dst}</cy2>'),
+                                                 style=style_html)
+                        except Exception as e:
+                            print_formatted_text(HTML(f'<cr>操作失败：{str(e)}</cr>'), style=style_html)
+                    else:
+                        print_formatted_text(HTML('<cr>用法错误：mv 源文件 目标文件</cr>'), style=style_html)
+
+                elif user_input.startswith('cp '):
+                    # 复制文件
+                    parts = user_input.split(' ')
+                    if len(parts) == 3:
+                        src, dst = parts[1], parts[2]
+                        try:
+                            if os.path.isdir(src):
+                                shutil.copytree(src, dst)
+                            else:
+                                shutil.copy2(src, dst)
+                            print_formatted_text(HTML(f'<cg>已复制：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
+                        except Exception as e:
+                            print_formatted_text(HTML(f'<cr>复制失败：{str(e)}</cr>'), style=style_html)
+                    else:
+                        print_formatted_text(HTML('<cr>用法错误：cp 源文件 目标文件</cr>'), style=style_html)
+
+                elif user_input.startswith('cat '):
+                    filename = user_input.split(' ', 1)[1]
+                    view_text_file(filename)
 
 
-            elif user_input.strip().startswith('vim '):
-                filename = user_input.strip().split(' ', 1)[1]
-                mini_vim(filename)
+                elif user_input.startswith('vim '):
+                    filename = user_input.split(' ', 1)[1]
+                    mini_vim(filename)
 
-            elif user_input.strip().startswith('cd '):
-                folder = user_input.strip().split(' ', 1)[1]
-                try:
-                    os.chdir(folder)
-                    print_formatted_text(HTML(f'<cg>已切换目录：</cg><cy2>{os.getcwd()}</cy2>'), style=style_html)
-                except Exception as e:
-                    print_formatted_text(HTML(f'<cr>切换失败：{str(e)}</cr>'), style=style_html)
+                elif user_input.startswith('cd '):
+                    folder = user_input.split(' ', 1)[1]
+                    try:
+                        os.chdir(folder)
+                        # print_formatted_text(HTML(f'<cg>已切换目录：</cg><cy2>{os.getcwd()}</cy2>'),style=style_html)
+                    except Exception as e:
+                        print_formatted_text(HTML(f'<cr>切换失败：{str(e)}</cr>'), style=style_html)
 
         except KeyboardInterrupt:
-            print_formatted_text(HTML('<cr>操作已中断</cr>'), style=style_html)
+            # 捕获主界面 Ctrl+C，不退出程序，只换行
+            print("")
+            continue
+        except EOFError:
+            break
         except Exception as e:
             print_formatted_text(HTML(f'<cr>系统错误：{str(e)}</cr>'), style=style_html)
 

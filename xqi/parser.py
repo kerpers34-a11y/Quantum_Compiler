@@ -246,58 +246,61 @@ class Parser:
 
     @staticmethod
     def handle_err_instruction(self, node, opcode_node):
-        """ 处理ERR指令（强制括号参数格式） """
-        # 前序指令验证
+        """ 增强版 ERR 处理：支持多参数物理模型 """
         if self.last_valid_opcode not in ('U3', 'CNOT'):
-            raise SyntaxError(f"ERR必须跟在U3/CNOT之后 (行 {opcode_node.line})")
-        if opcode_node.line <= self.last_opcode_line:
-            raise SyntaxError(f"ERR行号必须大于前序指令 (当前:{opcode_node.line} 前序:{self.last_opcode_line})")
+            raise SyntaxError(f"ERR 必须紧跟在 U3 或 CNOT 之后 (行 {opcode_node.line})")
 
-        # 解析带括号的操作数
         operands_node = self.operand_list()
+        all_ops = operands_node.children
 
-        # 参数结构验证（展开格式）
-        try:
-            # 格式要求：ERR(model, code, prob1, prob2) q[...]
-            if len(operands_node.children) < 5:
-                raise SyntaxError(f"ERR指令需要至少5个参数 (行 {opcode_node.line})")
+        if len(all_ops) < 3:  # 最简格式: ERR(model, code) q[n]
+            raise SyntaxError(f"ERR 指令参数不足 (行 {opcode_node.line})")
 
-            # 提取参数部分（前4个为括号内参数）
-            model, code, prob1, prob2, *qregs = operands_node.children
+        # 1. 验证模型 (model)
+        model_node = all_ops[0]
+        self.validate_err_model(model_node)
+        model_type = int(model_node.value)
 
-            # 参数类型验证
-            self.validate_err_model(model)
-            self.validate_err_code(code)
-            self.validate_err_probability(prob1)
-            self.validate_err_probability(prob2)
+        # 2. 找到第一个量子寄存器 q[...] 的位置，以此区分括号参数和目标比特
+        qreg_start_idx = -1
+        for idx, op in enumerate(all_ops):
+            if op.value.startswith('q['):
+                qreg_start_idx = idx
+                break
 
-            # 量子寄存器验证
-            if not any(q.value.startswith('q[') for q in qregs):
-                raise SyntaxError(f"缺失量子寄存器参数 (行 {opcode_node.line})")
-            for qreg in qregs:
-                self.validate_qubit_register(qreg)
+        if qreg_start_idx == -1:
+            raise SyntaxError(f"ERR 指令缺少目标量子寄存器 q[...] (行 {opcode_node.line})")
 
-        except SyntaxError as se:
-            # 增强错误定位
-            new_msg = f"{se.args[0]}\n正确格式示例：ERR(1,5,0.2,0.3) q[0] q[1];"
-            raise SyntaxError(new_msg) from None
+        # 3. 校验物理参数部分 (model, code 之后的参数)
+        # 如果是 4, 5, 6 模型，通常后面跟着 3 个物理参数
+        param_count = qreg_start_idx - 2  # 减去 model 和 code
+        if model_type in (4, 5, 6) and param_count < 3:
+            raise SyntaxError(f"模型 {model_type} 需要 3 个物理参数 (行 {opcode_node.line})")
 
-        # 构建AST节点
+        # 验证所有 q[...] 范围
+        for qreg in all_ops[qreg_start_idx:]:
+            self.validate_qubit_register(qreg)
+
         node.children = [
             opcode_node,
-            ASTNode("Operands", children=operands_node.children, line=operands_node.line, col=operands_node.col)
+            ASTNode("Operands", children=all_ops, line=operands_node.line, col=operands_node.col)
         ]
 
-        # 更新解析状态
         self.eat('ASSIGN')
         self.last_valid_opcode = 'ERR'
         self.last_opcode_line = opcode_node.line
+        return node
 
     # 辅助验证方法
     @staticmethod
     def validate_err_model(node):
-        if node.value not in {'1', '2', '3'}:
-            raise SyntaxError(f"错误模型值必须为1/2/3 (当前:{node.value} 行 {node.line})")
+        """ 允许 1-6 种误差模型 """
+        try:
+            model_val = int(node.value)
+            if model_val not in {1, 2, 3, 4, 5, 6}:
+                raise ValueError
+        except ValueError:
+            raise SyntaxError(f"错误模型值必须为 1-6 之间的整数 (当前:{node.value} 行 {node.line})")
 
     @staticmethod
     def validate_err_code(node):
@@ -483,67 +486,38 @@ class Parser:
     @staticmethod
     def validate_error_operands(operands):
         """
-        验证 error( ... ) 内的参数
-        规则：
-          - 至少 1 个参数（enable）
-          - 最多 6 个参数
-          - 第1个：TRUE / FALSE / 1 / 0
-          - 如果 enable 是 FALSE，后续参数可有可无（但若有会被忽略）
-          - 如果 enable 是 TRUE，后续参数依次为：
-              code (整数 0~9，默认 config.default_Q_error_Code)
-              p_single (单门概率 0~1，默认 config.default_Q1_error_Probability)
-              p_double (双门概率 0~1，默认 config.default_Q2_error_Probability)
-              p_measure (测量概率 0~1，默认值)
-              p_reset   (重置概率 0~1，默认值)
+        支持 Code 1, 2, 3, 4, 5, 6
         """
         if len(operands) < 1:
-            raise SyntaxError("error( ) 内至少需要一个参数：TRUE 或 FALSE")
+            raise SyntaxError("error 指令至少需要一个参数：TRUE 或 FALSE")
 
-        if len(operands) > 6:
-            raise SyntaxError(f"error( ) 内最多允许 6 个参数，实际收到 {len(operands)} 个")
+        # 增加上限到 7 (enable, code, p1, p2, p3, p_measure, p_reset)
+        if len(operands) > 7:
+            raise SyntaxError(f"error 指令最多允许 7 个参数，当前收到 {len(operands)} 个")
 
-        # 第一个参数：enable 开关
         enable_node = operands[0]
         enable_val = enable_node.value.strip().upper()
 
         if enable_val not in ('TRUE', 'FALSE', '1', '0'):
-            raise SyntaxError(
-                f"error 第一个参数必须是 TRUE / FALSE / 1 / 0，收到 '{enable_node.value}' "
-                f"(行 {enable_node.line}, 列 {enable_node.col})"
-            )
+            raise SyntaxError(f"error 第一个参数必须是 TRUE/FALSE/1/0")
 
-        # 如果是 FALSE，后续参数不做严格要求（可以有，但会被忽略）
         if enable_val in ('FALSE', '0'):
-            # 可选：可以在这里警告如果有额外参数
-            if len(operands) > 1:
-                print(f"警告：error(FALSE, ...) 中的额外参数将被忽略 (行 {operands[1].line})")
             return True
 
-        # 如果是 TRUE，验证后续参数的类型和范围
-        for i, op in enumerate(operands[1:], start=2):
-            val_str = op.value.strip()
+        # 校验 Code 和后续参数
+        if len(operands) > 1:
+            code_node = operands[1]
+            try:
+                code = int(code_node.value)
+            except ValueError:
+                raise SyntaxError(f"error code 必须是整数 (行 {code_node.line})")
 
-            if i == 2:  # code（第二个参数）
+            # 统一校验所有概率/物理参数是否为有效数字
+            for i, op in enumerate(operands[2:], start=3):
                 try:
-                    code = int(val_str)
-                    if not (0 <= code <= 9):  # 假设 error code 范围 0~9
-                        raise ValueError
+                    float(op.value)
                 except ValueError:
-                    raise SyntaxError(
-                        f"error 第二个参数（error code）必须是 0~9 的整数，"
-                        f"收到 '{val_str}' (行 {op.line})"
-                    )
-
-            else:  # p_single, p_double, p_measure, p_reset
-                try:
-                    prob = float(val_str)
-                    if not 0.0 <= prob <= 1.0:
-                        raise ValueError("概率必须在 0.0 ~ 1.0 之间")
-                except ValueError:
-                    raise SyntaxError(
-                        f"error 第 {i} 个参数（概率）必须是 0.0 ~ 1.0 的浮点数，"
-                        f"收到 '{val_str}' (行 {op.line})"
-                    )
+                    raise SyntaxError(f"error 第 {i} 个参数必须是数字 (行 {op.line})")
 
         return True
 

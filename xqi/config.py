@@ -53,11 +53,23 @@ default_Q1_error_Probability: Final=0.002
 default_Q2_error_Probability: Final=0.01
 
 default_reset_error_Probability: Final=0.001
-
 default_measure_error_Probability: Final=0.001
 
-default_amp_damping_gamma: Final = 0.001   ####################################################???
-default_phase_damping_gamma: Final=0.001  ####################################################???
+default_amp_damping_gamma: Final = 0.001
+default_phase_damping_gamma: Final=0.001
+
+default_thermal_relaxation_error_T1: Final = 50
+default_thermal_relaxation_error_T2:Final = 70
+default_thermal_relaxation_error_Tgate: Final = 0.1
+
+default_pauli_X_error_Probability:Final = 0.001
+default_pauli_Y_error_Probability:Final = 0.001
+default_pauli_Z_error_Probability:Final = 0.001
+
+default_coherent_X_unitary_error_Probability: Final = 0
+default_coherent_Y_unitary_error_Probability: Final = 0
+default_coherent_Z_unitary_error_Probability: Final = 0.01
+
 
 #####################################################################################
 #####################################################################################

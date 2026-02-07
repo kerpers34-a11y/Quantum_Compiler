@@ -8,7 +8,15 @@
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi.egg-info/PKG-INFO" beforeDir="false" afterPath="$PROJECT_DIR$/xqi.egg-info/PKG-INFO" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi.egg-info/requires.txt" beforeDir="false" afterPath="$PROJECT_DIR$/xqi.egg-info/requires.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xqi/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/parser.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -432,7 +440,15 @@
       <option name="project" value="LOCAL" />
       <updated>1770434263805</updated>
     </task>
-    <option name="localTasksCounter" value="37" />
+    <task id="LOCAL-00037" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1770444987855</created>
+      <option name="number" value="00037" />
+      <option name="presentableId" value="LOCAL-00037" />
+      <option name="project" value="LOCAL" />
+      <updated>1770444987855</updated>
+    </task>
+    <option name="localTasksCounter" value="38" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

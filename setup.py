@@ -17,7 +17,8 @@ setup(
         "pyvim>=3.0,<4.0",
         "Pygments>=2.18,<3.0",
         "scipy>=1.14,<2.0",
-        "wcwidth>=0.2,<1.0"
+        "wcwidth>=0.2,<1.0",
+        "pyperclip==1.11.0"
     ],
     entry_points={
         "console_scripts": [
