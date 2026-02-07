@@ -337,7 +337,8 @@ class Evaluator:
         num_states = 2 ** self.env.qreg_size
         self.shots_count_sv = [0] * num_states
         self.shots_count_dm = [0] * num_states
-        self._prepare_final_state_files()
+        self._prepare_final_state_files()  # 初始化结果文件 (.dat)
+        self._initialize_debug_files()
 
         # --- 2. 核心执行循环 (Shot 循环) ---
         for shot_nth in range(1, self.shot_total + 1):
@@ -1233,10 +1234,10 @@ class Evaluator:
         log_dir = os.path.dirname(self.parser.source_path) if self.parser.source_path else os.getcwd()
         # 统一定义文件路径
         self.paths = {
-            'sv_txt': os.path.join(log_dir, "XQI-QC-list.txt"),
-            'sv_dat': os.path.join(log_dir, "XQI-QC-debug.dat"),
-            'dm_txt': os.path.join(log_dir, "XQI-QC-Density-Matrix-list.txt"),
-            'dm_dat': os.path.join(log_dir, "XQI-QC-Density-Matrix-debug.dat")
+            'sv_txt': os.path.join(log_dir, config.filename_debug),
+            'sv_dat': os.path.join(log_dir, config.filename_debug_matlab),
+            'dm_txt': os.path.join(log_dir, config.filename_debug_Density_Matrix),
+            'dm_dat': os.path.join(log_dir, config.filename_debug_Density_Matrix_matlab)
         }
         # --- 第一步：物理删除已存在的旧文件 ---
         for path in self.paths.values():
