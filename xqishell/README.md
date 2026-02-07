@@ -116,6 +116,7 @@ Global Phase Shift，全局相位门，对整个量子态乘以 e^(iδ)，δ 可
 | **MOV**      | `MOV <dest>, <src>` <br>其中 `<dest>` 可为寄存器（PC, LR, SF, ZF）或普通寄存器 | 将源值赋给目标寄存器 |
 | **ADD/SUB**  | `ADD <dest>, <src1>, <src2>` <br>`SUB <dest>, <src1>, <src2>`                | 整数加法/减法 |
 | **MUL/DIV**  | `MUL <dest>, <src1>, <src2>` <br>`DIV <dest>, <src1>, <src2>`                | 整数乘法/除法 |
+
 github链接：https://github.com/kerpers34-a11y/Quantum_Compiler
 
 **祝您使用愉快！**
