@@ -9,6 +9,7 @@
 - **多误差模型支持**: 支持调节解极化误差、幅度/相位误差等6种误差模型
 
 ## 快速开始
+### (非必要)
 推荐下载使用 [conda](https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe) 隔离环境
 ```bash
 conda create -n xqishell python=3.11 -y
@@ -20,7 +21,7 @@ conda activate xqishell
 python -m venv xqishell
 source xqishell/bin/activate    # Windows 用 xqishell\Scripts\activate
 ```
-然后
+### 下载
 ```bash
 pip install xqi
 ```
