@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]          # ← 改成这个
+build-backend = "hatchling.build" # ← 改成这个
 
 [project]
 name = "xqi"
