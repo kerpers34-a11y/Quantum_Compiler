@@ -23,7 +23,7 @@ source xqishell/bin/activate    # Windows 用 xqishell\Scripts\activate
 ```
 ### 下载
 ```bash
-pip install xqi
+pip install xqishell
 ```
 输入xqishell以唤醒终端 (ctrl+c以退出)
 ```bash

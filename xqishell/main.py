@@ -9,10 +9,10 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.cursor_shapes import CursorShape
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
 
-from xqi.xqi_lexer import XQILexer
-from xqi.parser import Parser
-from xqi.evaluator import QuantumEnvironment,Evaluator
-from xqi import message_prompt, style_prompt, xqiasm_lexer, opcode_completer, style_html, CustomAutoSuggest, config, textprocessing_funs
+from xqishell.xqi_lexer import XQILexer
+from xqishell.parser import Parser
+from xqishell.evaluator import QuantumEnvironment,Evaluator
+from xqishell import message_prompt, style_prompt, xqiasm_lexer, opcode_completer, style_html, CustomAutoSuggest, config, textprocessing_funs
 
 bindings = KeyBindings()
 

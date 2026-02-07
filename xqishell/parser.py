@@ -1,4 +1,4 @@
-from xqi import config
+from xqishell import config
 class ASTNode:
     """ 抽象语法树的通用节点 """
     def __init__(self, type_, value=None, children=None, line=None, col=None):

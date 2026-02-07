@@ -1,7 +1,7 @@
 import os
 import struct
 import numpy as np
-from xqi import config
+from xqishell import config
 class ASTNode:
     def __init__(self, type, value=None, children=None, line=None, col=None):
         self.type = type

@@ -3,7 +3,7 @@ requires = ["hatchling"]          # ← 改成这个
 build-backend = "hatchling.build" # ← 改成这个
 
 [project]
-name = "xqi"
+name = "xqishell"
 version = "0.1.0"
 description = "Quantum Computing Compiler and Simulator"
 readme = {file = "README.md", content-type = "text/markdown"}
@@ -30,4 +30,4 @@ Homepage = "https://github.com/kerpers34-a11y/Quantum_Compiler"
 Repository = "https://github.com/kerpers34-a11y/Quantum_Compiler"
 "Bug Tracker" = "https://github.com/kerpers34-a11y/Quantum_Compiler/issues"
 [project.scripts]
-xqishell = "xqi.main:main"
+xqishell = "xqishell.main:main"

@@ -5,10 +5,22 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="95987af2-a4c7-42b6-a4de-044c02cc97b0" name="更改" comment="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/XQI-QC-Density-Matrix-debug.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/XQI-QC-debug.dat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/XQI-QC-state.dat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/ascii_art.db" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/ascii_art.db" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/auto_suggest.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/auto_suggest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/custom_lexer.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/custom_lexer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/parser.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/parser.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/style.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/style.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/textprocessing_funs.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/textprocessing_funs.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/word_completer.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/word_completer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/xqi_lexer.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqishell/xqi_lexer.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -507,7 +519,23 @@
       <option name="project" value="LOCAL" />
       <updated>1770475234110</updated>
     </task>
-    <option name="localTasksCounter" value="46" />
+    <task id="LOCAL-00046" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1770475884695</created>
+      <option name="number" value="00046" />
+      <option name="presentableId" value="LOCAL-00046" />
+      <option name="project" value="LOCAL" />
+      <updated>1770475884695</updated>
+    </task>
+    <task id="LOCAL-00047" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1770475896670</created>
+      <option name="number" value="00047" />
+      <option name="presentableId" value="LOCAL-00047" />
+      <option name="project" value="LOCAL" />
+      <updated>1770475896670</updated>
+    </task>
+    <option name="localTasksCounter" value="48" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
