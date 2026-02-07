@@ -198,8 +198,7 @@ def main_progress(user_input):
     write_debug_to_debug_file(lexer_main)
     parser = Parser(lexer_main)
     ast = parser.program()
-    # env = QuantumEnvironment(simulation_mode='statevector')
-    env = QuantumEnvironment(simulation_mode='density_matrix')
+    env = QuantumEnvironment()
     evaluator = Evaluator(env,parser,ast)
     evaluator.evaluate(ast)
 

@@ -6,7 +6,11 @@
   <component name="ChangeListManager">
     <list default="true" id="95987af2-a4c7-42b6-a4de-044c02cc97b0" name="更改" comment="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0-py3-none-any.whl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" beforeDir="false" afterPath="$PROJECT_DIR$/dist/xqi-0.1.0.tar.gz" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xqi/evaluator.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/evaluator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xqi/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/xqi/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -414,7 +418,15 @@
       <option name="project" value="LOCAL" />
       <updated>1770392226071</updated>
     </task>
-    <option name="localTasksCounter" value="35" />
+    <task id="LOCAL-00035" summary="Merge remote-tracking branch 'github_OttyAI/master'&#10;&#10;# Conflicts:&#10;#&#9;.idea/workspace.xml&#10;#&#9;lexer.py&#10;#&#9;main.py">
+      <option name="closed" value="true" />
+      <created>1770394267247</created>
+      <option name="number" value="00035" />
+      <option name="presentableId" value="LOCAL-00035" />
+      <option name="project" value="LOCAL" />
+      <updated>1770394267247</updated>
+    </task>
+    <option name="localTasksCounter" value="36" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
