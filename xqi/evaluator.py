@@ -311,38 +311,27 @@ class Evaluator:
         self.dm_state_dat_path = ""
 
     def evaluate(self, ast):
-        # --- 1. 预解析配置与指令准备（不打印） ---
-        def get_node_opcode(instr_node):
-            for child in instr_node.children:
-                if child.type == 'Opcode': return child.value
-            return None
+        # --- 1. 预解析 (Shot, Labels, Instructions) ---
+        self.body_instructions = []
+        self.labels = {}
 
-        # 扫描以确定 shot 总数
+        # 提取 Shot 次数
         for node in ast.children:
             if node.type == 'Instruction':
-                opcode = get_node_opcode(node)
+                opcode = next((c.value for c in node.children if c.type == 'Opcode'), None)
                 if opcode == 'shot':
                     ops = next((c for c in node.children if c.type == 'Operands'), None)
                     if ops and ops.children: self.shot_total = int(ops.children[0].value)
-        if self.shot_total <= 0: self.shot_total = 1
 
-        # 构建执行用的指令列表
-        self.body_instructions = []
-        self.labels = {}
-        config_opcodes = {'shot', 'qreg', 'creg', 'error'}
-        exclude_opcodes = config_opcodes | {'XQI-BEGIN', 'XQI-END', ';'}
-
+        # 构建指令体并记录 Label 地址
         for node in ast.children:
             if node.type == 'Label':
-                # 记录标签对应的指令索引
                 self.labels[node.value.strip(':').strip()] = len(self.body_instructions)
             elif node.type == 'Instruction':
-                opcode = get_node_opcode(node)
-                # qreg/creg 需要在执行前初始化，但我们可以通过标志位控制其内部打印
-                if opcode == 'qreg' or opcode == 'creg':
-                    # 执行但不立即打印（或者根据需要保持默认打印）
-                    self.execute_instruction(node)
-                elif opcode and opcode not in exclude_opcodes:
+                opcode = next((c.value for c in node.children if c.type == 'Opcode'), None)
+                if opcode in ['qreg', 'creg']:
+                    self.execute_instruction(node)  # 立即初始化寄存器
+                elif opcode and opcode not in ['shot', 'error', 'XQI-BEGIN', 'XQI-END', ';']:
                     self.body_instructions.append(node)
 
         num_states = 2 ** self.env.qreg_size
@@ -350,86 +339,66 @@ class Evaluator:
         self.shots_count_dm = [0] * num_states
         self._prepare_final_state_files()
 
-        # 记录用于展示的测量前状态
-        self.pre_measure_state_sv = None
-
-        # --- 2. 核心 Shot 循环 (首先执行) ---
+        # --- 2. 核心执行循环 (Shot 循环) ---
         for shot_nth in range(1, self.shot_total + 1):
             if shot_nth == 1:
-                print(f"\nTotal Program Row:{len(self.body_instructions):-10d}\n")
+                print(f"Total Program Row:{len(self.body_instructions):-10d}\n")
 
             self.shot_idx = shot_nth
             self.env.reset_for_shot()
-            self.env.pc = 0
-            captured_this_shot = False
+            self.env.measured_bits = set()
+            self.pre_measure_state_sv = None  # 每个 shot 重置，捕获第一次测量前的状态
 
             while self.env.pc < len(self.body_instructions) and not self.env.shot_completed:
-                # 打印 PC 轨迹
+                # 打印 PC 轨迹，严格匹配 C 输出：PC=%-10d (shot: %d)
                 print(f"PC={self.env.pc:<10d} (shot: {shot_nth})")
 
                 instr_node = self.body_instructions[self.env.pc]
-                opcode = get_node_opcode(instr_node)
+                opcode = next(c.value for c in instr_node.children if c.type == 'Opcode')
 
-                # 捕获测量前状态
-                if opcode == 'measure' and not captured_this_shot:
+                # 捕获测量前状态（用于最后展示 Complete Measure Info）
+                if opcode == 'measure' and self.pre_measure_state_sv is None:
                     self.pre_measure_state_sv = self.env.state_vector.copy()
-                    captured_this_shot = True
 
+                # 执行指令
                 old_pc = self.env.pc
                 self.execute_instruction(instr_node)
-                if self.env.pc == old_pc and not self.env.shot_completed:
+
+                # PC 控制逻辑：如果指令没有进行跳转（如 B/BL），则 PC + 1
+                if self.env.pc == old_pc:
                     self.env.pc += 1
 
+            # Shot 结束后统计
+            self.shots_count_sv[self._calculate_state_code(getattr(self.env, 'creg_ideal', self.env.creg))] += 1
+            self.shots_count_dm[self._calculate_state_code(self.env.creg)] += 1
             self._append_shot_states_to_binary()
-            self.shots_count_sv[self._calculate_current_state_code()] += 1
-            self.shots_count_dm[self._calculate_dm_sample_code()] += 1
-            print("")  # 每个 shot 后的换行
+            print("")
 
-        # --- 3. 打印指令清单与标签表 (Shot 结束后) ---
+            # --- 3. 最终控制台输出 (匹配 C 语言顺序) ---
+        # 打印指令清单
         print("\nOperate Instructions:\n")
         print("XQI-BEGIN")
+        # 这里的 source_code_text 建议从 parser 获取原始带行号的文本
         lines = self.source_code_text.splitlines()
-        display_idx = 1
-        for line in lines:
-            clean = line.strip()
-            if not clean or any(x in clean for x in ["XQI-BEGIN", "XQI-END", "Operate Instructions"]):
-                continue
-            # 清理可能存在的旧行号
-            import re
-            clean = re.sub(r'^\d+:\s*', '', clean)
-            print(f"{display_idx:>10d}: {clean}")
-            display_idx += 1
+        for idx, line in enumerate(lines):
+            if any(x in line for x in ["XQI-BEGIN", "XQI-END", "shot", "qreg", "creg", "error"]): continue
+            print(f"{line}")
         print("XQI-END\n")
 
+        # 打印标签表
         print("Label Number   Sequence   Label Symbol")
         for idx, (seq, symbol) in enumerate(self.labels_info):
-            # Sequence 通常指向指令的显示行号
-            print(f"Label {idx:3d}:      {seq + 1:3d}        {symbol}")
+            print(f"Label {idx:3d}:     {seq:3d}        {symbol}")
         print("\n")
 
-        # --- 4. 打印测量事件信息 ---
+        # 打印测量事件信息
         if self.pre_measure_state_sv is not None:
-            self._print_complete_measure_info(self.pre_measure_state_sv)
+            self._print_complete_measure_info(self.pre_measure_state_sv, filter_unmeasured=False)
             print("\nConsider the qubits NOT measured:")
-            self._print_complete_measure_info(self.pre_measure_state_sv)
+            self._print_complete_measure_info(self.pre_measure_state_sv, filter_unmeasured=True)
 
-        # --- 5. 打印最终统计结果 ---
-        print(f"\n\nXQI Success: After measure, STATE COUNT:")
-        print(f"Total Count:   {self.shot_total}")
-        for i in range(num_states):
-            bin_str = format(i, f'0{self.env.qreg_size}b')
-            count = self.shots_count_sv[i]
-            prob = count / self.shot_total
-            print(f"State:        {bin_str}:     Count={count:6d},    Probability={prob:.6f}")
-
-        print(f"\n\nXQI Success: After measure, STATE COUNT (Density Matrix):")
-        print(f"Total Count:   {self.shot_total}")
-        for i in range(num_states):
-            bin_str = format(i, f'0{self.env.qreg_size}b')
-            count = self.shots_count_dm[i]
-            prob = count / self.shot_total
-            print(f"State:        {bin_str}:     Count={count:6d},    Probability={prob:.6f}")
-
+        # 打印统计结果
+        self._print_final_counts()
         self._finalize_binary_files()
         print("\n\n          !SUCCESS!")
         print(" XQI: Quantum Computing Program is Terminated Normally!  \n")
@@ -507,42 +476,29 @@ class Evaluator:
         return self._calculate_current_state_code()
 
     def execute_instruction(self, node):
-        if node.type == 'Instruction':
-            opcode_node = next(c for c in node.children if c.type == 'Opcode')
-            opcode = opcode_node.value
+        opcode = next(c.value for c in node.children if c.type == 'Opcode')
 
-            # 1. 记录当前指令是否是量子操作
-            is_quantum_gate = opcode in ['U3', 'CNOT', 'GPS']
+        # 分发到各执行函数
+        method_name = f"execute_{opcode.lower().replace('-', '_')}"
+        if hasattr(self, method_name):
+            getattr(self, method_name)(node)
+        else:
+            self.execute_branch(node, opcode)
 
-            # 2. 执行指令基础操作 (需移除 execute_u3 等内部的 noise 调用)
-            # 根据 opcode 分发执行...
-            method_name = f"execute_{opcode.lower().replace('-', '_')}"
-            if hasattr(self, method_name):
-                getattr(self, method_name)(node)
-            else:
-                # 处理分支等特殊指令
-                self.execute_branch(node, opcode)
+        # 全局噪声应用逻辑
+        # 仅在量子门之后且当前环境开启了 error_model 时应用
+        if opcode in ['U3', 'CNOT', 'GPS'] and self.env.error_model:
+            # 检查下一条指令是不是 ERR。如果是，则跳过全局噪声，改用 ERR 提供的局部噪声
+            has_local_err = False
+            if self.env.pc + 1 < len(self.body_instructions):
+                next_instr = self.body_instructions[self.env.pc + 1]
+                next_opcode = next(c.value for c in next_instr.children if c.type == 'Opcode')
+                if next_opcode == 'ERR':
+                    has_local_err = True
 
-            # 3. 处理噪声应用逻辑 (关键点)
-            if is_quantum_gate:
-                # 检查下一条指令是否是 ERR
-                next_pc = self.env.pc + 1
-                has_local_err = False
-                if next_pc < len(self.body_instructions):
-                    next_node = self.body_instructions[next_pc]
-                    next_opcode = next(c for c in next_node.children if c.type == 'Opcode').value
-                    if next_opcode == 'ERR':
-                        has_local_err = True
-
-                if has_local_err:
-                    # 如果有 ERR，则跳过当前的全局噪声，执行 ERR 指令应用局部噪声
-                    self.env.pc += 1  # 推进 PC 到 ERR 指令
-                    self.execute_err(self.body_instructions[self.env.pc])
-                else:
-                    # 如果没有 ERR，应用当前的全局噪声
-                    qubits = self._get_affected_qubits(node)
-                    if self.env.error_model:
-                        self.env.apply_quantum_noise(qubits)
+            if not has_local_err:
+                qubits = self._get_affected_qubits(node)
+                self.env.apply_quantum_noise(qubits)
 
             # 4. 指令执行完毕，PC自增 (如果指令没自己改PC)
             # 如果上面执行了 ERR，PC 已经加过
@@ -896,32 +852,36 @@ class Evaluator:
         creg_idx = self._parse_register_index(operands[1].value, 'c')
         dim = 2 ** self.env.qreg_size
 
-        # --- 1. 状态矢量 (理想态) 独立采样 ---
+        # --- 1. State Vector (理想采样) ---
         probs_sv = [0.0, 0.0]
         for i in range(dim):
             bit = (i >> qubit) & 1
             probs_sv[bit] += np.abs(self.env.state_vector[i]) ** 2
 
-        # 归一化概率防止微小浮点误差
         p_sum = np.sum(probs_sv)
-        outcome_sv = np.random.choice([0, 1], p=probs_sv / p_sum)
+        outcome_sv = np.random.choice([0, 1], p=probs_sv / (p_sum if p_sum > 0 else 1))
 
         # 理想态坍缩
         new_sv = np.zeros_like(self.env.state_vector)
         for i in range(dim):
             if ((i >> qubit) & 1) == outcome_sv:
                 new_sv[i] = self.env.state_vector[i]
-        self.env.state_vector = new_sv / np.linalg.norm(new_sv)
+        norm = np.linalg.norm(new_sv)
+        self.env.state_vector = new_sv / norm if norm > 0 else new_sv
 
-        # --- 2. 密度矩阵 (物理态) 独立采样 ---
+        # 记录理想结果用于 SV COUNT
+        if not hasattr(self.env, 'creg_ideal'): self.env.creg_ideal = np.zeros_like(self.env.creg)
+        self.env.creg_ideal[creg_idx] = outcome_sv
+
+        # --- 2. Density Matrix (物理采样) ---
         proj0 = np.zeros((dim, dim), dtype=np.complex128)
         for i in range(dim):
             if ((i >> qubit) & 1) == 0: proj0[i, i] = 1.0
 
         prob0_dm = np.real(np.trace(proj0 @ self.env.density_matrix))
 
-        # 考虑 Readout Error
-        if self.env.error_model:
+        # 考虑 Readout Error (Code 9)
+        if self.env.error_model and self.env.error_model[0] == 9:
             p_m = self.env.error_model[3]
             prob0_dm = prob0_dm * (1 - p_m) + (1 - prob0_dm) * p_m
 
@@ -930,12 +890,16 @@ class Evaluator:
         # 物理态坍缩
         proj_dm = proj0 if outcome_dm == 0 else (np.eye(dim) - proj0)
         self.env.density_matrix = proj_dm @ self.env.density_matrix @ proj_dm.conj().T
-        self.env.density_matrix /= np.real(np.trace(self.env.density_matrix))
-        self.env.quantum_state = self.env.density_matrix  # 同步
+        trace = np.real(np.trace(self.env.density_matrix))
+        self.env.density_matrix = self.env.density_matrix / trace if trace > 1e-15 else self.env.density_matrix
+        self.env.quantum_state = self.env.density_matrix
 
-        # --- 3. 结果存储 ---
-        # 按照 C 语言逻辑，经典寄存器存储的是物理测量的结果
+        # 记录物理结果用于 DM COUNT
         self.env.creg[creg_idx] = outcome_dm
+
+        # 标记哪些位被测量过 (匹配 C 语言 Measure_Event_Quantum_Register_Bit)
+        if not hasattr(self.env, 'measured_bits'): self.env.measured_bits = set()
+        self.env.measured_bits.add(qubit)
     def execute_add(self, node):
         self._execute_binary_arithmetic(node, 'add')
     def execute_sub(self, node):
@@ -1334,18 +1298,57 @@ class Evaluator:
             f.write(f"M[{idx:4d}]={val:15.10f}\n")
         f.write("\n\n")
 
-    def _print_complete_measure_info(self, state_vec):
-        """格式化输出测量概率和对应的分量矩阵"""
+    @staticmethod
+    def _calculate_state_code(creg_array):
+        """通用代码计算：将经典寄存器数组转为整数索引"""
+        code = 0
+        for i, val in enumerate(creg_array):
+            bit = 1 if abs(val.real) > 0.5 else 0
+            code += (bit << i)
+        return code
+
+    def _print_complete_measure_info(self, state_vec, filter_unmeasured=False):
         print("\nXQI Success: Complete Measure Event Information:\n")
         dim = len(state_vec)
         q_size = self.env.qreg_size
+        measured_bits = getattr(self.env, 'measured_bits', set())
+
         for i in range(dim):
-            prob = np.abs(state_vec[i])**2
             bin_str = format(i, f'0{q_size}b')
+            prob = np.abs(state_vec[i]) ** 2
+
+            # C 语言逻辑：对于没被测量到的位，如果状态在该位上是 '1'，则该路径概率为 0
+            if filter_unmeasured:
+                for q_idx in range(q_size):
+                    if q_idx not in measured_bits:
+                        # 匹配 C 语言：Transform_Unsigned_Decimal_to_Binary 的索引
+                        if bin_str[q_size - 1 - q_idx] == '1':
+                            prob = 0.0
+                            break
+
             print(f"state:        {bin_str}: probability={prob:.6f}")
             print(f"resultant measure state:")
             print(f"matrix rows:{dim}, matrix columns:1:")
             for j in range(dim):
-                val = state_vec[j] if i == j else 0.0j
+                # 只有对应基矢的分量保留，其他为 0 (模拟投影)
+                val = state_vec[j] if (i == j and prob > 0) else 0.0j
                 print(f"[{j}][0]:({val.real:.6f})+({val.imag:.6f})i")
-            print()
+            print("")
+
+    def _print_final_counts(self):
+        q_size = self.env.qreg_size
+        num_states = 2 ** q_size
+
+        print("\nXQI Success: After measure, STATE COUNT:")
+        print(f"Total Count:   {self.shot_total}")
+        for i in range(num_states):
+            bin_str = format(i, f'0{q_size}b')
+            count = self.shots_count_sv[i]
+            print(f"State:        {bin_str}:     Count={count:6d},    Probability={count / self.shot_total:.6f}")
+
+        print("\n\nXQI Success: After measure, STATE COUNT (Density Matrix):")
+        print(f"Total Count:   {self.shot_total}")
+        for i in range(num_states):
+            bin_str = format(i, f'0{q_size}b')
+            count = self.shots_count_dm[i]
+            print(f"State:        {bin_str}:     Count={count:6d},    Probability={count / self.shot_total:.6f}")
