@@ -3,8 +3,15 @@ Name: xqi
 Version: 0.1.0
 Summary: Quantum Computing Compiler and Simulator
 Author: Your Name
-Author-email: Your Name <you@example.com>
+Author-email: kerpers34-a11y <kerpers34@gmail.com>
+Project-URL: Homepage, https://github.com/kerpers34-a11y/Quantum_Compiler
+Project-URL: Repository, https://github.com/kerpers34-a11y/Quantum_Compiler
+Project-URL: Bug Tracker, https://github.com/kerpers34-a11y/Quantum_Compiler/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
 Requires-Python: >=3.11
+Description-Content-Type: text/markdown
 Requires-Dist: markdown-it-py<4.0,>=3.0
 Requires-Dist: mdurl<1.0,>=0.1
 Requires-Dist: numpy<3.0,>=2.1

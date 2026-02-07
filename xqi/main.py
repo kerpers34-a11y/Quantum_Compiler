@@ -108,6 +108,7 @@ def handle_multi_line_input(initial_text=""):
         lexer=xqiasm_lexer,
         completer=opcode_completer,
         key_bindings=multi_bindings,
+        auto_suggest=CustomAutoSuggest(),
         multiline=True,
         clipboard=PyperclipClipboard()
     )
@@ -235,7 +236,6 @@ def main():
         clipboard=PyperclipClipboard(),
         multiline=False,
         cursor=CursorShape.BLINKING_BEAM,
-        auto_suggest=CustomAutoSuggest(),
         wrap_lines=True,
     )
 
