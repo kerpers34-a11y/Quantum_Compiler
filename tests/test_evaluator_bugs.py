@@ -54,7 +54,7 @@ def test_b4_debug_dat_explicit_little_endian(tmp_path, monkeypatch):
         formats.append(fmt)
         return real_pack(fmt, *args)
 
-    monkeypatch.setattr("xqishell.evaluator.struct.pack", spy)
+    monkeypatch.setattr("xqishell.evaluator.io.struct.pack", spy)
     run_xqiasm(wrap("debug;"), tmp_path)
 
     float_fmts = {f for f in formats if isinstance(f, str) and f.endswith("ff")}
