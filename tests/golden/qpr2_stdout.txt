@@ -1015,16 +1015,16 @@ matrix rows:4, matrix columns:1:
 
 XQI Success: After measure, STATE COUNT:
 Total Count:   8
-State:        00:     Count=     1,    Probability=0.125000
-State:        01:     Count=     7,    Probability=0.875000
+State:        00:     Count=     3,    Probability=0.375000
+State:        01:     Count=     5,    Probability=0.625000
 State:        10:     Count=     0,    Probability=0.000000
 State:        11:     Count=     0,    Probability=0.000000
 
 
 XQI Success: After measure, STATE COUNT (Density Matrix):
 Total Count:   8
-State:        00:     Count=     1,    Probability=0.125000
-State:        01:     Count=     4,    Probability=0.500000
+State:        00:     Count=     3,    Probability=0.375000
+State:        01:     Count=     2,    Probability=0.250000
 State:        10:     Count=     2,    Probability=0.250000
 State:        11:     Count=     1,    Probability=0.125000
 

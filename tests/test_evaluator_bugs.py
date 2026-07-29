@@ -30,8 +30,7 @@ def wrap(body: str) -> str:
 def test_b2_rand_uses_operands_not_opcode(tmp_path):
     """rand R[0],R[1]; 以 R[1] 为种子向 R[0] 写入 [0,1) 均匀随机数(当前调用即崩)。"""
     result = run_xqiasm(wrap("MOV R[1],42;\nrand R[0],R[1];"), tmp_path)
-    np.random.seed(42)
-    expected = np.random.uniform(0, 1)
+    expected = np.random.default_rng(42).uniform(0, 1)
     assert result.evaluator.env.registers[0] == pytest.approx(expected)
 
 

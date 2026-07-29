@@ -15,7 +15,7 @@ class InstructionError(ValueError):
         super().__init__(f"[{instr_name}] {msg}")
 class QuantumEnvironment:
     def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_REGISTER,
-                 max_memory=config.MAX_MEMORY, simulation_mode='statevector'):
+                 max_memory=config.MAX_MEMORY, simulation_mode='statevector', seed=None):
         # 基础参数
         if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
             raise ValueError("Register sizes must be non-negative integers")
@@ -24,6 +24,9 @@ class QuantumEnvironment:
         self.simulation_mode = simulation_mode.lower()
         self.max_registers = max_registers
         self.max_memory = max_memory
+        # 实例级随机源:测量采样等都经由它,替代原先对全局 np.random 的依赖
+        # (import 本模块不再重置全局随机流;seed 固定时全链路可复现)
+        self.rng = np.random.default_rng(seed)
         # 初始化量子寄存器大小和经典寄存器大小
         self._initial_qreg_size = qreg_size
         self._initial_creg_size = creg_size
@@ -274,7 +277,6 @@ class QuantumEnvironment:
         return new_rho
 
 class Evaluator:
-    np.random.seed()
     def __init__(self, env, parser, ast):
         self.shot_idx = None
         self.shot_total = 0 # 初始化 shot 总数
@@ -800,7 +802,7 @@ class Evaluator:
             probs_sv[bit] += np.abs(self.env.state_vector[i]) ** 2
 
         p_sum = np.sum(probs_sv)
-        outcome_sv = np.random.choice([0, 1], p=probs_sv / (p_sum if p_sum > 0 else 1))
+        outcome_sv = self.env.rng.choice([0, 1], p=probs_sv / (p_sum if p_sum > 0 else 1))
 
         # 理想态坍缩
         new_sv = np.zeros_like(self.env.state_vector)
@@ -821,7 +823,7 @@ class Evaluator:
 
         prob0_dm = np.real(np.trace(proj0 @ self.env.density_matrix))
 
-        outcome_dm = 0 if np.random.rand() < prob0_dm else 1
+        outcome_dm = 0 if self.env.rng.random() < prob0_dm else 1
 
         # 物理态坍缩
         proj_dm = proj0 if outcome_dm == 0 else (np.eye(dim) - proj0)
@@ -1134,8 +1136,8 @@ class Evaluator:
         # 操作数在 Operands 子节点中;children[0] 是 Opcode 节点,不可按其取寄存器号
         dest = self._parse_register_index(operands_node.children[0].value, 'R')
         seed = self._parse_register_index(operands_node.children[1].value, 'R')
-        np.random.seed(int(self.env.registers[seed]))
-        self.env.registers[dest] = np.random.uniform(0, 1)
+        # 用种子寄存器构造独立的局部随机源,不扰动测量使用的实例随机流
+        self.env.registers[dest] = np.random.default_rng(int(self.env.registers[seed])).uniform(0, 1)
 
     def print_debug_info(self, shot_id=1):
         if not hasattr(self, '_debug_file_initialized'):

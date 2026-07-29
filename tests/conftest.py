@@ -51,14 +51,13 @@ def run_xqiasm(source: str, workdir: Path, seed: int = GOLDEN_SEED) -> PipelineR
     old_cwd = os.getcwd()
     os.chdir(workdir)
     try:
-        # 固定测量随机流;必须在 evaluate 前设置(import evaluator 时类体会随机化一次)
-        np.random.seed(seed)
         buf = io.StringIO()
         with redirect_stdout(buf):
             lexer = XQILexer(source)
             parser = Parser(lexer)
             ast = parser.program()
-            env = QuantumEnvironment()
+            # 实例级随机源:seed 固定时测量采样全链路可复现
+            env = QuantumEnvironment(seed=seed)
             evaluator = Evaluator(env, parser, ast)
             evaluator.evaluate(ast)
     finally:
@@ -98,7 +97,11 @@ def parse_state_dat(path: Path, matrix: bool = False) -> StateDat:
 
 @pytest.fixture(autouse=True)
 def _fixed_seed():
-    """每个测试默认固定 numpy 全局随机流(需要其他 seed 的测试可自行重设)。"""
+    """每个测试默认固定 numpy 全局随机流(覆盖可能残留的全局随机使用点)。
+
+    实例级随机源由 run_xqiasm 通过 QuantumEnvironment(seed=...) 注入,
+    二者互不干扰。
+    """
     np.random.seed(GOLDEN_SEED)
     yield
 
