@@ -75,6 +75,10 @@ Global Phase Shift，全局相位门，对整个量子态乘以 e^(iδ)，δ 可
 重置指定量子比特到 |0⟩，支持带重置误差的物理实现（根据 error model 中的 p_reset）
 - **B / BL**
 无条件跳转（Branch）和带链接寄存器的跳转（Branch with Link），用于实现函数调用与返回
+- **BX**
+按链接寄存器跳转（`BX LR`），等价于 `MOV PC,LR` 的返回惯用法
+- **CMP**
+比较指令（`CMP R[a],R[b]` 或立即数），计算 a-b 并据此设置 ZF/SF 标志位，不保存结果
 - **BEQ / BNE / BGT / BGE / BLT / BLE**
 条件分支指令，根据 ZF（零标志）和 SF（符号标志）判断是否跳转
 - **LDR**
@@ -110,12 +114,28 @@ Global Phase Shift，全局相位门，对整个量子态乘以 e^(iδ)，δ 可
 | **debug-p**  | `debug-p`                                                                    | 调试指令，打印概率分布 |
 | **Label**    | `<label>:`                                                                   | 定义标签，用于跳转指令 |
 | **B/BL**     | `B <label>` 或 `BL <label>`                                                  | 无条件跳转（B），带链接寄存器保存的跳转（BL） |
+| **BX**       | `BX LR` <br>仅支持 LR 操作数                                                  | 按链接寄存器跳转（返回） |
+| **CMP**      | `CMP <src1>, <src2>` <br>操作数支持立即数或 R 寄存器                          | 比较并设置 ZF/SF 标志位 |
 | **BEQ/BNE**  | `BEQ <label>` 或 `BNE <label>`                                               | 条件跳转：等于/不等于 |
 | **BGT/BGE**  | `BGT <label>` 或 `BGE <label>`                                               | 条件跳转：大于/大于等于 |
 | **BLT/BLE**  | `BLT <label>` 或 `BLE <label>`                                               | 条件跳转：小于/小于等于 |
 | **MOV**      | `MOV <dest>, <src>` <br>其中 `<dest>` 可为寄存器（PC, LR, SF, ZF）或普通寄存器 | 将源值赋给目标寄存器 |
 | **ADD/SUB**  | `ADD <dest>, <src1>, <src2>` <br>`SUB <dest>, <src1>, <src2>`                | 整数加法/减法 |
 | **MUL/DIV**  | `MUL <dest>, <src1>, <src2>` <br>`DIV <dest>, <src1>, <src2>`                | 整数乘法/除法 |
+
+## 开发(从源码构建)
+
+```bash
+git clone https://github.com/kerpers34-a11y/Quantum_Compiler
+cd Quantum_Compiler
+pip install -e .          # 可编辑安装(唯一构建配置: pyproject.toml)
+pip install pytest ruff   # 开发依赖
+pytest                    # 运行测试(黄金文件端到端 + bug 回归 + 兼容测试)
+ruff check xqishell tests # lint
+```
+
+变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 github链接：https://github.com/kerpers34-a11y/Quantum_Compiler
 
 **祝您使用愉快！**

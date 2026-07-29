@@ -12,11 +12,9 @@ B7: CMP/BX 半成品 —— 词法声明但 evaluator 无 execute_cmp/execute_bx
 """
 
 import struct
-from pathlib import Path
 
 import numpy as np
 import pytest
-
 from conftest import PROJECT_ROOT, run_xqiasm
 
 

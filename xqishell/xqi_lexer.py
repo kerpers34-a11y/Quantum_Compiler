@@ -1,9 +1,9 @@
 import re
 from collections import deque
 
+from xqishell.errors import XQISyntaxError
 from xqishell.instructions import opcode_alternation
 from xqishell.tokens import Token
-from xqishell.errors import XQISyntaxError
 
 # 指令交替串(长度降序防前缀遮蔽,'-' 转义)
 _OPCODE_ALT = opcode_alternation().replace('-', r'\-')

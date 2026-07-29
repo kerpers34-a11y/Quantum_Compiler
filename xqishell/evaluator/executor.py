@@ -117,7 +117,7 @@ class Evaluator(StateIO):
         print("XQI-BEGIN")
         # 这里的 source_code_text 建议从 parser 获取原始带行号的文本
         lines = self.source_code_text.splitlines()
-        for idx, line in enumerate(lines):
+        for line in lines:
             if any(x in line for x in ["XQI-BEGIN", "XQI-END", "shot", "qreg", "creg", "error"]): continue
             print(f"{line}")
         print("XQI-END\n")
@@ -469,16 +469,16 @@ class Evaluator(StateIO):
         P0 = np.array([[1, 0], [0, 0]], dtype=np.complex128)
         P1 = np.array([[0, 0], [0, 1]], dtype=np.complex128)
         X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
-        I = np.eye(2, dtype=np.complex128)
+        I2 = np.eye(2, dtype=np.complex128)
         # 构造两个分支的张量积并求和
         op0 = np.array([[1.0]], dtype=np.complex128)
         op1 = np.array([[1.0]], dtype=np.complex128)
         for i in range(self.env.qreg_size - 1, -1, -1):
             # 分支 0
-            gate0 = P0 if i == control else I
+            gate0 = P0 if i == control else I2
             op0 = np.kron(op0, gate0)
             # 分支 1
-            gate1 = P1 if i == control else (X if i == target else I)
+            gate1 = P1 if i == control else (X if i == target else I2)
             op1 = np.kron(op1, gate1)
         full_cnot = op0 + op1
         self.env.apply_unitary(full_cnot)

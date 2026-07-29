@@ -211,7 +211,7 @@ class StateIO:
                             break
 
             print(f"state:        {bin_str}: probability={prob:.6f}")
-            print(f"resultant measure state:")
+            print("resultant measure state:")
             print(f"matrix rows:{dim}, matrix columns:1:")
             for j in range(dim):
                 # 只有对应基矢的分量保留，其他为 0 (模拟投影)

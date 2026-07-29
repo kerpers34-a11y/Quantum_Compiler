@@ -6,12 +6,10 @@ Phase 4 命令分发表落地后,cat 应成为 COMMANDS 中的唯一条目,
 本测试同时兼容两种实现形态。
 """
 
-import os
-from pathlib import Path
 
 import pytest
-
 from conftest import PROJECT_ROOT
+
 from xqishell.commands import COMMANDS, ShellContext, dispatch
 
 XQISHELL_DIR = PROJECT_ROOT / "xqishell"

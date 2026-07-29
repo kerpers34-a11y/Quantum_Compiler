@@ -1,6 +1,6 @@
 from xqishell import config
-from xqishell.errors import XQISyntaxError
 from xqishell.ast_nodes import ASTNode  # noqa: F401  # re-export,兼容 `from xqishell.parser import ASTNode`
+from xqishell.errors import XQISyntaxError
 
 
 class Parser:
@@ -484,7 +484,7 @@ class Parser:
         enable_val = enable_node.value.strip().upper()
 
         if enable_val not in ('TRUE', 'FALSE', '1', '0'):
-            raise XQISyntaxError(f"error 第一个参数必须是 TRUE/FALSE/1/0")
+            raise XQISyntaxError("error 第一个参数必须是 TRUE/FALSE/1/0")
 
         if enable_val in ('FALSE', '0'):
             return True
@@ -493,9 +493,9 @@ class Parser:
         if len(operands) > 1:
             code_node = operands[1]
             try:
-                code = int(code_node.value)
+                int(code_node.value)
             except ValueError:
-                raise XQISyntaxError(f"error code 必须是整数 (行 {code_node.line})")
+                raise XQISyntaxError(f"error code 必须是整数 (行 {code_node.line})") from None
 
             # 统一校验所有概率/物理参数是否为有效数字
             for i, op in enumerate(operands[2:], start=3):

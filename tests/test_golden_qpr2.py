@@ -12,7 +12,6 @@
 from pathlib import Path
 
 import numpy as np
-
 from conftest import GOLDEN_SEED, parse_state_dat, run_xqiasm
 
 GOLDEN = Path(__file__).parent / "golden"

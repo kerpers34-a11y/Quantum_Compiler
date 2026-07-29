@@ -60,7 +60,7 @@ def cmd_execute_file(ctx: ShellContext, filename: str) -> None:
     if not os.path.exists(filepath):
         _print(f'<cr>错误：文件</cr><cy2> {filepath} </cy2><cr>不存在</cr>')
         return
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, encoding='utf-8') as f:
         ctx.run_program(f.read())
 
 
@@ -91,7 +91,7 @@ def cmd_rm(ctx: ShellContext, args: list[str]) -> None:
 def cmd_cat(ctx: ShellContext, args: list[str]) -> None:
     filename = ' '.join(args)
     try:
-        with open(filename, 'r', encoding='utf-8') as f:
+        with open(filename, encoding='utf-8') as f:
             content = f.read()
         _print(f'<ivory>{content}</ivory>')
     except Exception as e:

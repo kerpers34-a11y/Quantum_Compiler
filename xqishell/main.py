@@ -2,17 +2,25 @@ import os
 import time
 
 import pyperclip
-from prompt_toolkit import print_formatted_text, HTML
-from prompt_toolkit import PromptSession
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit import HTML, PromptSession, print_formatted_text
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
+from prompt_toolkit.cursor_shapes import CursorShape
+from prompt_toolkit.key_binding import KeyBindings
 
+from xqishell import (
+    ASCII_ART_LOGO,
+    CustomAutoSuggest,
+    config,
+    message_prompt,
+    opcode_completer,
+    style_html,
+    style_prompt,
+    xqiasm_lexer,
+)
 from xqishell.commands import ShellContext, dispatch
-from xqishell.xqi_lexer import XQILexer
+from xqishell.evaluator import Evaluator, QuantumEnvironment
 from xqishell.parser import Parser
-from xqishell.evaluator import QuantumEnvironment,Evaluator
-from xqishell import ASCII_ART_LOGO, message_prompt, style_prompt, xqiasm_lexer, opcode_completer, style_html, CustomAutoSuggest, config
+from xqishell.xqi_lexer import XQILexer
 
 bindings = KeyBindings()
 
@@ -130,7 +138,7 @@ def run_with_progress(user_input):
         # 检查文件是否存在
         if not os.path.isfile(file):
             # 创建空文件
-            with open(file, 'w') as f:
+            with open(file, 'w'):
                 print(f"Create file: {os.path.abspath(file)}")
 
     # 统计 XQI-BEGIN 与 XQI-END 之间的分号数(每条语句/注释一个,与原逐字符统计等价)

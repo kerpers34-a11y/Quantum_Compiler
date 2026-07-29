@@ -1,5 +1,5 @@
 from pygments.lexer import RegexLexer
-from pygments.token import Text, Comment, Keyword, Name, String, Number, Punctuation
+from pygments.token import Comment, Keyword, Name, Number, Punctuation, String, Text
 
 from xqishell.instructions import opcode_alternation
 

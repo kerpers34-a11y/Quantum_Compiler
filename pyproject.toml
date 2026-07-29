@@ -45,22 +45,12 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 # Baseline 豁免(重构期间逐步收窄,只允许删除不允许新增):
-#   Phase 2 收窄: E722(裸except) F401(未用导入) F841(未用变量) W292 I001 UP015 F541
-#   Phase 3-4 收窄: E701(单行多语句) B904(except内raise缺from) E741 B007
-#   随文件重写自然消解: E501(行过长)
+#   已收窄并清零: E722 F401 F841 W292 I001 UP015 F541 B007 E741(2026-07 重构完成)
+#   剩余项随后续维护逐步消解:
 ignore = [
-    "E501",  # line-too-long:既有 12 处,随重构逐文件消解
-    "E701",  # multiple-statements-on-one-line:既有 15 处
-    "E722",  # bare-except:既有 5 处,Phase 2 修复
-    "E741",  # ambiguous-variable-name:既有 2 处
-    "W292",  # missing-newline-at-eof:既有 9 处
-    "I001",  # unsorted-imports:既有 7 处,Phase 3 统一整理
-    "UP015", # redundant-open-modes:既有 3 处
-    "F401",  # unused-import:既有 5 处,Phase 2 清理
-    "F541",  # f-string-missing-placeholders:既有 2 处
-    "F841",  # unused-variable:既有 5 处,Phase 2 清理
-    "B007",  # unused-loop-control-variable:既有 1 处
-    "B904",  # raise-without-from-inside-except:既有 10 处,Phase 3 随错误体系统一处理
+    "E501",  # line-too-long:既有若干处,随文件维护逐行消解
+    "E701",  # multiple-statements-on-one-line:execute_* 中既有写法
+    "B904",  # raise-without-from-inside-except:既有 10 处,随错误体系后续统一处理
 ]
 
 [tool.pytest.ini_options]
