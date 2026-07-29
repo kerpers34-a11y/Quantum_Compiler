@@ -843,9 +843,11 @@ class Evaluator:
         # 应用全局相位
         phase = np.exp(1j * delta)
         if self.env.simulation_mode == 'statevector':
-            self.env.quantum_state *= phase
+            # 注意:quantum_state 恒为 density_matrix 的别名,态矢量必须用 state_vector
+            self.env.state_vector = self.env.state_vector * phase
         else:
-            self.env.quantum_state = phase * self.env.quantum_state * phase.conj()
+            # 全局相位对密度矩阵无可观测效应:e^{iδ} ρ e^{-iδ} = ρ,物理上恒等,无需计算
+            pass
 
     def execute_measure(self, node):
         operands = next(c for c in node.children if c.type == 'Operands').children
@@ -880,11 +882,6 @@ class Evaluator:
             if ((i >> qubit) & 1) == 0: proj0[i, i] = 1.0
 
         prob0_dm = np.real(np.trace(proj0 @ self.env.density_matrix))
-
-        # 考虑 Readout Error (Code 9)
-        if self.env.error_model and self.env.error_model[0] == 9:
-            p_m = self.env.error_model[3]
-            prob0_dm = prob0_dm * (1 - p_m) + (1 - prob0_dm) * p_m
 
         outcome_dm = 0 if np.random.rand() < prob0_dm else 1
 
@@ -1134,6 +1131,33 @@ class Evaluator:
         }
         return conditions.get(condition_type, lambda: False)()
 
+    def execute_cmp(self, node):
+        """CMP a, b:计算 (a - b) 并置 SF/ZF(不保存结果)。
+
+        标志位约定与 _set_flags 及 6 个条件分支保持一致:
+        a == b → ZF=1(EQ);a < b(有符号)→ SF=1(LT);a > b → SF=0 且 ZF=0(GT)。
+        操作数支持立即数或 R 寄存器。
+        """
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if not operands_node or len(operands_node.children) < 2:
+            raise ValueError("CMP requires 2 operands")
+        val1 = self._parse_parameter(operands_node.children[0], 'R')
+        val2 = self._parse_parameter(operands_node.children[1], 'R')
+        self._set_flags(val1 - val2)
+
+    def execute_bx(self, node):
+        """BX LR:跳转到 LR 保存的返回地址(等价 MOV PC,LR 的返回惯用法)。
+
+        仅支持 LR 操作数;其他寄存器/标签操作数报错。
+        """
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if not operands_node or not operands_node.children:
+            raise ValueError("BX requires an operand (only LR is supported)")
+        target = operands_node.children[0].value.strip()
+        if target != 'LR':
+            raise ValueError(f"BX only supports LR, got {target}")
+        self.env.pc = int(self.env.lr)
+
     # 辅助方法 ---------------------------------------------------
     @staticmethod
     def _parse_memory_address(addr_str):
@@ -1160,20 +1184,18 @@ class Evaluator:
     def execute_reset(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         qubit = self._parse_register_index(operands_node.children[0].value, 'q')
-        # 获取错误模型中的重置概率 (Error Code 8)
-        p_reset = 0.0
-        if self.env.error_model:
-            code, p1, p2, p_measure, p_reset_val = self.env.error_model
-            if code == 8:
-                p_reset = p1 # C 语言中 reset 使用的是 Q1_error_Probability
-        # print(f"Executing Physical Reset on q[{qubit}] with p={p_reset}")
-        self.env.apply_physical_reset(qubit, p_reset)
+        # execute_error 只产生 code 1-6,其中不含 reset 概率项,物理重置恒为理想重置
+        self.env.apply_physical_reset(qubit, 0.0)
     def execute_barrier(self, node):
         # No-op in this simulation
         pass
     def execute_rand(self, node):
-        dest = int(node.children[0].value[2:-1])
-        seed = int(node.children[1].value[2:-1])
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if not operands_node or len(operands_node.children) < 2:
+            raise ValueError("rand requires 2 operands (dest_reg, seed_reg)")
+        # 操作数在 Operands 子节点中;children[0] 是 Opcode 节点,不可按其取寄存器号
+        dest = self._parse_register_index(operands_node.children[0].value, 'R')
+        seed = self._parse_register_index(operands_node.children[1].value, 'R')
         np.random.seed(int(self.env.registers[seed]))
         self.env.registers[dest] = np.random.uniform(0, 1)
 
@@ -1216,16 +1238,17 @@ class Evaluator:
             self._write_common_debug(f)
 
         # --- 3. 写入二进制数据 (.dat) ---
-        # 显式使用 float32 确保与 C 语言 float 兼容
+        # 显式使用 float32 确保与 C 语言 float 兼容;
+        # 统一 '<ff' 显式小端,与 state .dat 的写入格式保持一致
         with open(self.paths['sv_dat'], "ab") as f:
             for val in psi:
-                f.write(struct.pack('ff', float(val.real), float(val.imag)))
+                f.write(struct.pack('<ff', float(val.real), float(val.imag)))
 
         with open(self.paths['dm_dat'], "ab") as f:
             for i in range(dim):
                 for j in range(dim):
                     val = rho[i, j]
-                    f.write(struct.pack('ff', float(val.real), float(val.imag)))
+                    f.write(struct.pack('<ff', float(val.real), float(val.imag)))
     def _initialize_debug_files(self):
         """
         初始化所有调试文件。
