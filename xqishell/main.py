@@ -361,11 +361,6 @@ def main():
                     else:
                         print_formatted_text(HTML('<cr>用法错误：cp 源文件 目标文件</cr>'), style=style_html)
 
-                elif user_input.startswith('cat '):
-                    filename = user_input.split(' ', 1)[1]
-                    view_text_file(filename)
-
-
                 elif user_input.startswith('vim '):
                     filename = user_input.split(' ', 1)[1]
                     mini_vim(filename)

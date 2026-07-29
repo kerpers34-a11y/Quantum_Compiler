@@ -18,6 +18,7 @@ test_b8_handle_err_is_plain_method / test_b9 应为红;test_b1_gps_delta_rejects
 import inspect
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -66,13 +67,14 @@ def test_b9_parser_no_hang_on_missing_error_with_labels():
     当前实现会在 program() 前置扫描中死循环,因此在子进程中运行并限时:
     修复前子进程超时(红),修复后迅速以 SyntaxError 退出(绿)。
     """
+    project_root = Path(__file__).resolve().parents[1]
     program = (
-        "import sys; sys.path.insert(0, r'%s');"
+        f"import sys; sys.path.insert(0, r'{project_root}');"
         "from xqishell.xqi_lexer import XQILexer;"
         "from xqishell.parser import Parser;"
         "src = 'XQI-BEGIN\\nshot 1;\\nqreg q[1];\\ncreg c[1];\\nBEQ equal;\\nequal: MOV PC,0;\\nXQI-END\\n';"
         "Parser(XQILexer(src)).program()"
-    ) % str(__import__("pathlib").Path(__file__).resolve().parents[1])
+    )
     try:
         result = subprocess.run(
             [sys.executable, "-c", program],

@@ -22,7 +22,8 @@ def test_b5_single_cat_command_handler():
     dispatch_hits = 0
     for p in XQISHELL_DIR.rglob("*.py"):
         text = p.read_text(encoding="utf-8")
-        startswith_hits += text.count('startswith("cat ")')
+        # 兼容单双引号两种写法
+        startswith_hits += text.count("startswith('cat ')") + text.count('startswith("cat ")')
         # Phase 4 命令分发表形态:"cat": cmd_xxx 或 'cat': cmd_xxx
         dispatch_hits += text.count('"cat":') + text.count("'cat':")
     total = startswith_hits + dispatch_hits
