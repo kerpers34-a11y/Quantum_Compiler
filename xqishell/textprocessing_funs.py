@@ -1,25 +1,23 @@
+"""文本处理辅助函数。"""
+
+
 def ensure_xqi_tags(content):
-    """确保内容包含正确的首尾标记"""
-    lines = content.split('\n')
+    """确保内容包含 XQI-BEGIN / XQI-END 首尾标记,缺失则补齐。
 
-    # 寻找第一个非空行
-    begin_index = next((i for i, line in enumerate(lines) if line.strip()), 0)
-    # 寻找最后一个非空行
-    end_index = next((i for i, line in reversed(list(enumerate(lines))) if line.strip()), len(lines) - 1)
+    语义(以 main.py 历史上实际使用的实现为准):
+    - 只要没有任何一行(去空白后)等于 'XQI-BEGIN',就在最前面插入;
+    - 'XQI-END' 同理,在末尾追加;
+    - 返回值保证以换行结尾。
+    """
+    begin_marker = 'XQI-BEGIN'
+    end_marker = 'XQI-END'
 
-    # 标记修正逻辑
-    if begin_index < len(lines):
-        if lines[begin_index].strip() != 'XQI-BEGIN':
-            lines.insert(begin_index, 'XQI-BEGIN')
-    else:
-        lines.append('XQI-BEGIN')
+    lines = [line.rstrip('\r\n') for line in content.split('\n')]
 
-    if end_index >= 0:
-        if lines[end_index].strip() != 'XQI-END':
-            lines.insert(end_index + 1, 'XQI-END')
-    else:
-        lines.append('XQI-END')
+    # 自动添加缺失标记
+    if not any(line.strip() == begin_marker for line in lines):
+        lines.insert(0, begin_marker)
+    if not any(line.strip() == end_marker for line in lines):
+        lines.append(end_marker)
 
-    # 重建内容保持原始格式
-    processed = '\n'.join(lines).strip()
-    return f"XQI-BEGIN\n{processed}\nXQI-END" if not processed else processed
+    return '\n'.join(lines) + '\n'  # 保证结尾换行

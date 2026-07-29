@@ -118,22 +118,6 @@ def handle_multi_line_input(initial_text=""):
         return None
 
 
-
-def ensure_xqi_tags(content):
-    """增强版标记检测"""
-    begin_marker = 'XQI-BEGIN'
-    end_marker = 'XQI-END'
-
-    lines = [line.rstrip('\r\n') for line in content.split('\n')]
-
-    # 自动添加缺失标记
-    if not any(line.strip() == begin_marker for line in lines):
-        lines.insert(0, begin_marker)
-    if not any(line.strip() == end_marker for line in lines):
-        lines.append(end_marker)
-
-    return '\n'.join(lines) + '\n'  # 保证结尾换行
-
 ###################################################################################
 ###################################################################################
 
