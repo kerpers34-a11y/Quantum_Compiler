@@ -13,6 +13,20 @@ class Parser:
         self.last_valid_opcode = None
         self.last_opcode_line = -1
 
+        # 指令 → 操作数校验函数(无专属校验的指令不在表中,直接放行)
+        self._operand_validators = {
+            "GPS": self.validate_gps_operands,
+            "shot": self._validate_shot_operands,
+            "error": self.validate_error_operands,
+            "U3": self.validate_u3_operands,
+            "CNOT": self.validate_cnot_operands,
+            "ADD": self.validate_classical_arithmetic_operands,
+            "SUB": self.validate_classical_arithmetic_operands,
+            "MUL": self.validate_classical_arithmetic_operands,
+            "DIV": self.validate_classical_arithmetic_operands,
+            "MOV": self.validate_mov_operands,
+        }
+
     def eat(self, token_type):
         """ 消耗当前 token，并获取下一个 token """
         if self.current_token[0] == token_type:
@@ -157,80 +171,64 @@ class Parser:
         return node
 
     def instruction(self):
-        """ 解析指令，确保 measure 作为独立的 Instruction """
+        """解析一条指令:操作码 + 操作数列表 + 语句终止符 ';'。
+
+        ERR 与 measure 有独立的解析路径;其余指令统一走
+        「操作数列表 + 按指令分派的校验」流程。
+        """
         node = ASTNode("Instruction", line=self.current_token[2], col=self.current_token[3])
         opcode_node = self.opcode()
+        opcode = opcode_node.value
 
-        if opcode_node.value == "ERR":
+        if opcode == "ERR":
             return self.handle_err_instruction(node, opcode_node)
-        if opcode_node.value == "GPS":
-            operands_node = self.operand_list()
-            self.validate_gps_operands(operands_node.children)
-            node.children.extend([opcode_node, operands_node])
-            self.eat('ASSIGN')
-            return node
+        if opcode == "measure":
+            return self._parse_measure(node, opcode_node)
 
-        if opcode_node.value == "measure":
-            # 手动解析 measure 的操作数结构: q[X] -> c[Y]
-            source = self.operand()  # 解析量子寄存器
-
-            # 检查并消耗 ARROW
-            if self.current_token[0] != 'ARROW':
-                raise XQISyntaxError(f"measure指令缺少 -> (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-            self.eat('ARROW')
-
-            dest = self.operand()  # 解析经典寄存器
-
-            # 构建操作数节点（仅包含源和目标）
-            operands_node = ASTNode("Operands", children=[source, dest], line=source.line, col=source.col)
-            self.validate_measure_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-
-            # 确保后续没有多余的操作数或逗号
-            while self.current_token[0] != 'ASSIGN' and self.current_token[0] != 'EOF':
-                raise XQISyntaxError(f"measure指令参数过多 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-
-            self.eat('ASSIGN')
-            return node
-        elif opcode_node.value == "shot":
-            # 解析 shot 操作数
-            operands_node = self.operand_list()
-            if len(operands_node.children) != 1 or not operands_node.children[0].value.isdigit() or int(operands_node.children[0].value) <= 0:
-                raise XQISyntaxError(
-                    f"语法错误: shot 后面必须且仅能接一个正整数 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value == "error":
-            operands_node = self.operand_list()
-            self.validate_error_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value == "U3":
-            operands_node = self.operand_list()
-            self.validate_u3_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value == "CNOT":
-            operands_node = self.operand_list()
-            self.validate_cnot_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value in ["CLDR", "CSTR"]:
-            operands_node = self.operand_list()
-            self.validate_cldr_cstr_operands(opcode_node.value, operands_node.children)
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value in ["ADD", "SUB", "MUL", "DIV"]:  # 经典指令
-            operands_node = self.operand_list()
-            self.validate_classical_arithmetic_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-        elif opcode_node.value == "MOV":
-            operands_node = self.operand_list()
-            self.validate_mov_operands(operands_node.children)
-            node.children = [opcode_node, operands_node]
-        else:
-            # 其他指令的标准解析方式
-            operands_node = self.operand_list()
-            node.children = [opcode_node, operands_node]
+        operands_node = self.operand_list()
+        self._validate_operands(opcode, operands_node.children)
+        node.children = [opcode_node, operands_node]
         # 确保 `;` 结束
         self.eat('ASSIGN')
-
         return node
+
+    def _validate_operands(self, opcode, operands):
+        """按指令类型分发操作数校验(无专属校验的指令直接放行)。"""
+        if opcode in ("CLDR", "CSTR"):
+            self.validate_cldr_cstr_operands(opcode, operands)
+            return
+        validator = self._operand_validators.get(opcode)
+        if validator is not None:
+            validator(operands)
+
+    def _parse_measure(self, node, opcode_node):
+        """解析 measure 的特殊操作数结构: q[X] -> c[Y]。"""
+        source = self.operand()  # 解析量子寄存器
+
+        # 检查并消耗 ARROW
+        if self.current_token[0] != 'ARROW':
+            raise XQISyntaxError(f"measure指令缺少 -> (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+        self.eat('ARROW')
+
+        dest = self.operand()  # 解析经典寄存器
+
+        # 构建操作数节点（仅包含源和目标）
+        operands_node = ASTNode("Operands", children=[source, dest], line=source.line, col=source.col)
+        self.validate_measure_operands(operands_node.children)
+        node.children = [opcode_node, operands_node]
+
+        # 确保后续没有多余的操作数或逗号
+        if self.current_token[0] not in ('ASSIGN', 'EOF'):
+            raise XQISyntaxError(f"measure指令参数过多 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+
+        self.eat('ASSIGN')
+        return node
+
+    def _validate_shot_operands(self, operands):
+        """shot 后面必须且仅能接一个正整数。"""
+        if len(operands) != 1 or not operands[0].value.isdigit() or int(operands[0].value) <= 0:
+            raise XQISyntaxError(
+                f"语法错误: shot 后面必须且仅能接一个正整数 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
     def handle_err_instruction(self, node, opcode_node):
         """ 增强版 ERR 处理：支持多参数物理模型 """
