@@ -54,6 +54,11 @@ class Parser:
                 self.eat('NEWLINE')
                 continue
 
+            # 只推进 OPCODE；遇到其他 token（如标签定义）说明声明阶段已结束，
+            # 跳出交由下方缺少 shot/error 的检查报错，避免死循环
+            if self.current_token[0] != 'OPCODE':
+                break
+
             # 检查 shot 和 error，允许顺序无关
             if self.current_token[0] == 'OPCODE':
                 if self.current_token[1] == 'shot' and not found_shot:
@@ -172,7 +177,7 @@ class Parser:
         opcode_node = self.opcode()
 
         if opcode_node.value == "ERR":
-            return self.handle_err_instruction(self, node, opcode_node)
+            return self.handle_err_instruction(node, opcode_node)
         if opcode_node.value == "GPS":
             operands_node = self.operand_list()
             self.validate_gps_operands(operands_node.children)
@@ -244,7 +249,6 @@ class Parser:
 
         return node
 
-    @staticmethod
     def handle_err_instruction(self, node, opcode_node):
         """ 增强版 ERR 处理：支持多参数物理模型 """
         if self.last_valid_opcode not in ('U3', 'CNOT'):
@@ -529,13 +533,12 @@ class Parser:
             )
         # 提取两个操作数
         delta_operand, q_operand = operands[0], operands[1]
-        # 验证参数部分
+        # 验证参数部分：delta 可以是立即数或 R 寄存器，但不能是量子寄存器
+        if delta_operand.value.startswith('q['):
+            raise SyntaxError(f"GPS参数delta不能是量子寄存器 (行 {delta_operand.line})")
 
-        if q_operand.value.startswith('q['):
-            raise SyntaxError(f"GPS参数delta不能是量子寄存器 (行 {q_operand.line})")
-
-        # 验证操作数部分
-        if len(delta_operand) != 1 or not delta_operand[0].value.startswith('q['):
+        # 验证操作数部分：第二个操作数必须是量子寄存器
+        if not q_operand.value.startswith('q['):
             raise SyntaxError(f"GPS第二个操作数必须是量子寄存器 (行 {self.current_token[2]})")
 
         # 验证寄存器范围
