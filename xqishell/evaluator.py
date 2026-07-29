@@ -23,6 +23,10 @@ class QuantumEnvironment:
         # 实例级随机源:测量采样等都经由它,替代原先对全局 np.random 的依赖
         # (import 本模块不再重置全局随机流;seed 固定时全链路可复现)
         self.rng = np.random.default_rng(seed)
+        # 惰性状态的显式声明(此前在方法内动态挂载,靠 hasattr/getattr 防御)
+        self.creg_ideal = None      # 首次测量时创建:理想(SV)测量结果
+        self.measured_bits = set()  # 本 shot 内已测量的量子位
+        self.shot_completed = False
         # 初始化量子寄存器大小和经典寄存器大小
         self._initial_qreg_size = qreg_size
         self._initial_creg_size = creg_size
@@ -88,6 +92,7 @@ class QuantumEnvironment:
         self.SF = 0
         self.ZF = 0
         self.shot_completed = False
+        self.measured_bits = set()
     def full_reset(self):
         """完全重置所有状态（用于环境初始化）"""
         self.reset_for_shot()
@@ -117,14 +122,8 @@ class QuantumEnvironment:
         self.convert_to_density()
         for qubit in qubits:
             kraus_ops = self.generate_kraus_operators(noise_type, qubit, params)
+            self.apply_kraus_channel(kraus_ops)
 
-            new_rho = np.zeros_like(self.quantum_state, dtype=np.complex128)
-            for k in kraus_ops:
-                new_rho += k @ self.quantum_state @ k.conj().T
-
-            trace = np.real(np.trace(new_rho))
-            self.density_matrix = new_rho / trace if trace > 1e-15 else new_rho
-            self.quantum_state = self.density_matrix
     def generate_kraus_operators(self, noise_type, qubit_idx, params):
         p = params[0]
         I = np.eye(2, dtype=np.complex128)
@@ -178,25 +177,27 @@ class QuantumEnvironment:
         # 提升到全系统空间
         operators = []
         for coeff, m in raw_ops:
-            full_op = np.eye(1, dtype=np.complex128)
-            for q in reversed(range(self.qreg_size)):
-                if q == qubit_idx:
-                    full_op = np.kron(full_op, m)
-                else:
-                    full_op = np.kron(full_op, np.eye(2))
-            operators.append(full_op * coeff)
+            operators.append(self.lift_operator(m, qubit_idx) * coeff)
         return operators
+    def lift_operator(self, single_op, target_qubit):
+        """把单比特算符提升到全系统空间(q[n-1] ⊗ ... ⊗ q[0],高位在左)。"""
+        full_op = np.array([[1.0]], dtype=np.complex128)
+        for i in range(self.qreg_size - 1, -1, -1):
+            full_op = np.kron(full_op, single_op if i == target_qubit else np.eye(2))
+        return full_op
+
     def get_full_operator(self, op, target_qubit):
         """将单比特算符扩展到全系统空间，匹配 C 语言的高位在左原则"""
-        # C 语言逻辑：q[n-1] ⊗ q[n-2] ⊗ ... ⊗ q[0]
-        # 对应 Python：从最高索引开始 kron
-        full_op = np.array([[1.0]], dtype=np.complex128)
-        for i in range(self.qreg_size - 1, -1, -1): # 从高位到低位
-            if i == target_qubit:
-                full_op = np.kron(full_op, op)
-            else:
-                full_op = np.kron(full_op, np.eye(2, dtype=np.complex128))
-        return full_op
+        return self.lift_operator(op, target_qubit)
+
+    def apply_kraus_channel(self, kraus_ops):
+        """对密度矩阵应用 Kraus 信道 ρ→ΣKρK†,并在迹非零时归一化。"""
+        new_rho = np.zeros_like(self.density_matrix, dtype=np.complex128)
+        for k in kraus_ops:
+            new_rho += k @ self.density_matrix @ k.conj().T
+        trace = np.real(np.trace(new_rho))
+        self.density_matrix = new_rho / trace if trace > 1e-15 else new_rho
+        self.quantum_state = self.density_matrix
     def apply_unitary(self, u_matrix):
         """同时作用于两个数组，并确保引用同步"""
         self.state_vector = u_matrix @ self.state_vector
@@ -223,13 +224,8 @@ class QuantumEnvironment:
         m0 = np.array([[1, 0]], dtype=np.complex128)
         m1 = np.array([[0, 1]], dtype=np.complex128)
 
-        def build_op(single):
-            full = np.array([[1.0]], dtype=np.complex128)
-            for i in range(self.qreg_size - 1, -1, -1):
-                full = np.kron(full, single if i == target_qubit else np.eye(2))
-            return full
-
-        f0, f1 = build_op(m0), build_op(m1)
+        f0 = self.lift_operator(m0, target_qubit)
+        f1 = self.lift_operator(m1, target_qubit)
         # 计算偏迹后的 rho
         rho_reduced = f0 @ self.density_matrix @ f0.conj().T + \
                       f1 @ self.density_matrix @ f1.conj().T
@@ -286,6 +282,11 @@ class Evaluator:
         self.parser = parser
         self.state_dat_path = ""
         self.dm_state_dat_path = ""
+        # 调试文件状态(此前在方法内动态挂载,靠 hasattr 防御)
+        self.paths = {}
+        self._debug_file_initialized = False
+        # 每个 shot 捕获第一次测量前的状态(用于最终展示)
+        self.pre_measure_state_sv = None
 
     def evaluate(self, ast):
         # --- 1. 预解析 (Shot, Labels, Instructions) ---
@@ -323,8 +324,7 @@ class Evaluator:
                 print(f"Total Program Row:{len(self.body_instructions):-10d}\n")
 
             self.shot_idx = shot_nth
-            self.env.reset_for_shot()
-            self.env.measured_bits = set()
+            self.env.reset_for_shot()  # 内含 measured_bits 重置
             self.pre_measure_state_sv = None  # 每个 shot 重置，捕获第一次测量前的状态
 
             while self.env.pc < len(self.body_instructions) and not self.env.shot_completed:
@@ -346,8 +346,9 @@ class Evaluator:
                 if self.env.pc == old_pc:
                     self.env.pc += 1
 
-            # Shot 结束后统计
-            self.shots_count_sv[self._calculate_state_code(getattr(self.env, 'creg_ideal', self.env.creg))] += 1
+            # Shot 结束后统计(未发生测量时,理想计数回落到物理 creg)
+            creg_sv = self.env.creg_ideal if self.env.creg_ideal is not None else self.env.creg
+            self.shots_count_sv[self._calculate_state_code(creg_sv)] += 1
             self.shots_count_dm[self._calculate_state_code(self.env.creg)] += 1
             self._append_shot_states_to_binary()
             print("")
@@ -487,14 +488,7 @@ class Evaluator:
         for qubit in target_qubits:
             # 调用 Environment 中已经实现的 Kraus 生成逻辑
             kraus_ops = self.env.generate_kraus_operators(model_type, qubit, params)
-
-            new_rho = np.zeros_like(self.env.quantum_state, dtype=np.complex128)
-            for k in kraus_ops:
-                new_rho += k @ self.env.quantum_state @ k.conj().T
-
-            trace = np.real(np.trace(new_rho))
-            self.env.density_matrix = new_rho / trace if trace > 1e-15 else new_rho
-            self.env.quantum_state = self.env.density_matrix
+            self.env.apply_kraus_channel(kraus_ops)
 
     def execute_shot(self, node):
         pass
@@ -809,7 +803,7 @@ class Evaluator:
         self.env.state_vector = new_sv / norm if norm > 0 else new_sv
 
         # 记录理想结果用于 SV COUNT
-        if not hasattr(self.env, 'creg_ideal'): self.env.creg_ideal = np.zeros_like(self.env.creg)
+        if self.env.creg_ideal is None: self.env.creg_ideal = np.zeros_like(self.env.creg)
         self.env.creg_ideal[creg_idx] = outcome_sv
 
         # --- 2. Density Matrix (物理采样) ---
@@ -832,7 +826,6 @@ class Evaluator:
         self.env.creg[creg_idx] = outcome_dm
 
         # 标记哪些位被测量过 (匹配 C 语言 Measure_Event_Quantum_Register_Bit)
-        if not hasattr(self.env, 'measured_bits'): self.env.measured_bits = set()
         self.env.measured_bits.add(qubit)
     def execute_add(self, node):
         self._execute_binary_arithmetic(node, 'add')
@@ -990,50 +983,38 @@ class Evaluator:
             self.env.pc = self._get_label_address(label)
         # 不跳转时 → 外层 +1
 
+    @staticmethod
+    def _require_operands(node, opcode, count, detail):
+        """取指令的 Operands 子节点并校验操作数数量,统一缺失时的报错形式。"""
+        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
+        if not operands_node or len(operands_node.children) < count:
+            raise XQIExecutionError(f"{opcode} requires {count} operands ({detail})")
+        return operands_node.children
+
     def execute_ldr(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 2:
-            raise XQIExecutionError("LDR requires 2 operands (dest_reg, src_mem)")
-        # 解析目标寄存器 R[...]
-        dest_reg = self._parse_register_index(operands_node.children[0].value, 'R')
-        # 解析源内存地址 M[...]
-        src_mem = self._parse_memory_address(operands_node.children[1].value)
-        # 执行加载操作
+        ops = self._require_operands(node, "LDR", 2, "dest_reg, src_mem")
+        dest_reg = self._parse_register_index(ops[0].value, 'R')
+        src_mem = self._parse_memory_address(ops[1].value)
         self.env.registers[dest_reg] = self.env.memory[src_mem]
+
     def execute_str(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 2:
-            raise XQIExecutionError("STR requires 2 operands (src_reg, dest_mem)")
-        # 解析源寄存器 R[...]
-        src_reg = self._parse_register_index(operands_node.children[0].value, 'R')
-        # 解析目标内存地址 M[...]
-        dest_mem = self._parse_memory_address(operands_node.children[1].value)
-        # 执行存储操作
+        ops = self._require_operands(node, "STR", 2, "src_reg, dest_mem")
+        src_reg = self._parse_register_index(ops[0].value, 'R')
+        dest_mem = self._parse_memory_address(ops[1].value)
         self.env.memory[dest_mem] = self.env.registers[src_reg]
+
     def execute_cldr(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 3:
-            raise XQIExecutionError("CLDR requires 3 operands (dest_creg, real_mem, imag_mem)")
-        # 解析目标经典寄存器 c[...]
-        dest_creg = self._parse_register_index(operands_node.children[0].value, 'c')
-        # 解析实部和虚部内存地址
-        real_mem = self._parse_memory_address(operands_node.children[1].value)
-        imag_mem = self._parse_memory_address(operands_node.children[2].value)
-        # 构建复数并存储
-        self.env.creg[dest_creg] = complex(
-            self.env.memory[real_mem],
-            self.env.memory[imag_mem]
-        )
+        ops = self._require_operands(node, "CLDR", 3, "dest_creg, real_mem, imag_mem")
+        dest_creg = self._parse_register_index(ops[0].value, 'c')
+        real_mem = self._parse_memory_address(ops[1].value)
+        imag_mem = self._parse_memory_address(ops[2].value)
+        self.env.creg[dest_creg] = complex(self.env.memory[real_mem], self.env.memory[imag_mem])
+
     def execute_cstr(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 3:
-            raise XQIExecutionError("CSTR requires 3 operands (src_creg, real_mem, imag_mem)")
-        # 解析源经典寄存器 c[...]
-        src_creg = self._parse_register_index(operands_node.children[0].value, 'c')
-        # 解析目标内存地址
-        real_mem = self._parse_memory_address(operands_node.children[1].value)
-        imag_mem = self._parse_memory_address(operands_node.children[2].value)
-        # 分解复数并存储
+        ops = self._require_operands(node, "CSTR", 3, "src_creg, real_mem, imag_mem")
+        src_creg = self._parse_register_index(ops[0].value, 'c')
+        real_mem = self._parse_memory_address(ops[1].value)
+        imag_mem = self._parse_memory_address(ops[2].value)
         complex_val = self.env.creg[src_creg]
         self.env.memory[real_mem] = complex_val.real
         self.env.memory[imag_mem] = complex_val.imag
@@ -1136,7 +1117,7 @@ class Evaluator:
         self.env.registers[dest] = np.random.default_rng(int(self.env.registers[seed])).uniform(0, 1)
 
     def print_debug_info(self, shot_id=1):
-        if not hasattr(self, '_debug_file_initialized'):
+        if not self._debug_file_initialized:
             self._initialize_debug_files()
 
         q_size = self.env.qreg_size
