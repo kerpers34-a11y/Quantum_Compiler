@@ -596,6 +596,106 @@ class Evaluator:
         self.env.creg = self.env._initial_creg.copy()
         # 匹配 C 语言 613 行
         print(f"Classical Register Number: {creg_size}")
+    # ---------------------------------------------------------------- MOV
+    def _parse_mov_dest(self, dest_str):
+        """解析 MOV 目标:返回 (类型, R索引或None)。"""
+        if dest_str in {'PC', 'LR', 'SF', 'ZF'}:
+            return dest_str, None
+        if dest_str.startswith('R[') and dest_str.endswith(']'):
+            try:
+                idx = int(dest_str[2:-1])
+            except ValueError:
+                raise XQIExecutionError(f"Invalid R register format: {dest_str}") from None
+            if idx < 0 or idx >= len(self.env.registers):
+                raise XQIExecutionError(f"R[{idx}] out of range")
+            return 'R', idx
+        raise XQIExecutionError(f"Unsupported destination: {dest_str}")
+
+    def _parse_mov_src(self, src_str):
+        """解析 MOV 源:返回 (类型, R索引/立即数值或None)。
+
+        支持立即数(整/浮)、R 寄存器、PC、LR、SF、ZF。
+        """
+        if src_str in {'PC', 'LR', 'SF', 'ZF'}:
+            return src_str, None
+        if src_str.startswith('R[') and src_str.endswith(']'):
+            try:
+                idx = int(src_str[2:-1])
+            except ValueError:
+                raise XQIExecutionError(f"Invalid source R register: {src_str}") from None
+            if idx < 0 or idx >= len(self.env.registers):
+                raise XQIExecutionError(f"Source R[{idx}] out of range")
+            return 'R', idx
+        if src_str.isdigit() or src_str.lstrip('-').isdigit():
+            return 'imm', int(src_str)
+        if '.' in src_str or 'e' in src_str.lower() or 'E' in src_str:
+            return 'imm', float(src_str)
+        raise XQIExecutionError(f"Unsupported source operand: {src_str}")
+
+    def _src_value(self, src_type, src_val):
+        """取源操作数的当前值。"""
+        if src_type == 'R':
+            return self.env.registers[src_val]
+        if src_type == 'imm':
+            return src_val
+        if src_type == 'PC':
+            return self.env.pc
+        if src_type == 'LR':
+            return self.env.lr
+        if src_type == 'SF':
+            return float(self.env.SF)
+        if src_type == 'ZF':
+            return float(self.env.ZF)
+        raise XQIExecutionError(f"Unsupported source: {src_type}")
+
+    def _mov_to_r(self, dest_val, src_type, src_val):
+        value = self._src_value(src_type, src_val)
+        self.env.registers[dest_val] = value
+        # 写入普通 R 寄存器后，更新标志位（模仿算术指令）
+        self._set_flags(value)
+
+    def _mov_to_pc(self, _dest_val, src_type, src_val):
+        if src_type == 'imm' and src_val == 0:
+            # 特殊语义：结束当前 shot
+            self.env.shot_completed = True
+            return
+        if src_type in {'SF', 'ZF'}:
+            raise XQIExecutionError("Cannot MOV SF/ZF directly to PC")
+        if src_type == 'R':
+            self.env.pc = int(self.env.registers[src_val])
+        elif src_type == 'imm':
+            self.env.pc = int(src_val)
+        elif src_type == 'LR':
+            self.env.pc = self.env.lr
+        else:
+            raise XQIExecutionError(f"Unsupported src → PC: {src_type}")
+        # PC 变更不更新标志位
+
+    def _mov_to_lr(self, _dest_val, src_type, src_val):
+        if src_type in {'SF', 'ZF'}:
+            raise XQIExecutionError("Cannot MOV SF/ZF directly to LR")
+        if src_type == 'R':
+            self.env.lr = int(self.env.registers[src_val])
+        elif src_type == 'imm':
+            self.env.lr = int(src_val)
+        elif src_type == 'PC':
+            self.env.lr = self.env.pc
+        else:
+            raise XQIExecutionError(f"Unsupported src → LR: {src_type}")
+        # LR 变更不更新标志位
+
+    def _mov_to_sf(self, _dest_val, src_type, src_val):
+        if src_type in {'PC', 'LR'}:
+            raise XQIExecutionError("Cannot MOV PC/LR to SF")
+        val = int(self._src_value(src_type, src_val))
+        self.env.SF = 1 if val != 0 else 0 # 通常 SF=1 表示负数，这里简化处理为非零即1
+
+    def _mov_to_zf(self, _dest_val, src_type, src_val):
+        if src_type in {'PC', 'LR'}:
+            raise XQIExecutionError("Cannot MOV PC/LR to ZF")
+        val = int(self._src_value(src_type, src_val))
+        self.env.ZF = 1 if val == 0 else 0
+
     def execute_mov(self, node):
         """
         执行 MOV 指令，支持：
@@ -605,127 +705,19 @@ class Evaluator:
         - 寄存器/立即数 → SF / ZF（会直接影响标志位）
         - 写入普通 R 寄存器后自动更新 SF 和 ZF
         """
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        if not operands_node or len(operands_node.children) < 2:
-            raise XQIExecutionError("MOV instruction requires 2 operands")
-        dest_str = operands_node.children[0].value.strip()
-        src_str = operands_node.children[1].value.strip()
-        # 解析目标
-        if dest_str in {'PC', 'LR', 'SF', 'ZF'}:
-            dest_type = dest_str
-            dest_val = None
-        elif dest_str.startswith('R[') and dest_str.endswith(']'):
-            dest_type = 'R'
-            try:
-                dest_val = int(dest_str[2:-1])
-            except ValueError:
-                raise XQIExecutionError(f"Invalid R register format: {dest_str}") from None
-            if dest_val < 0 or dest_val >= len(self.env.registers):
-                raise XQIExecutionError(f"R[{dest_val}] out of range")
-        else:
-            raise XQIExecutionError(f"Unsupported destination: {dest_str}")
-        # 解析源（支持立即数、R寄存器、PC、LR）
-        if src_str in {'PC', 'LR', 'SF', 'ZF'}:
-            src_type = src_str
-            src_val = None
-        elif src_str.startswith('R[') and src_str.endswith(']'):
-            src_type = 'R'
-            try:
-                src_val = int(src_str[2:-1])
-            except ValueError:
-                raise XQIExecutionError(f"Invalid source R register: {src_str}") from None
-            if src_val < 0 or src_val >= len(self.env.registers):
-                raise XQIExecutionError(f"Source R[{src_val}] out of range")
-        elif src_str.isdigit() or (src_str.lstrip('-').isdigit()):
-            src_type = 'imm'
-            src_val = int(src_str) # 优先尝试整数
-        elif '.' in src_str or 'e' in src_str.lower() or 'E' in src_str:
-            src_type = 'imm'
-            src_val = float(src_str) # 浮点数
-        else:
-            raise XQIExecutionError(f"Unsupported source operand: {src_str}")
-        # 执行 MOV
-        if dest_type == 'R':
-            # 普通寄存器目标
-            if src_type == 'R':
-                value = self.env.registers[src_val]
-            elif src_type == 'imm':
-                value = src_val
-            elif src_type == 'PC':
-                value = self.env.pc
-            elif src_type == 'LR':
-                value = self.env.lr
-            elif src_type == 'SF':
-                value = float(self.env.SF)
-            elif src_type == 'ZF':
-                value = float(self.env.ZF)
-            else:
-                raise XQIExecutionError(f"Unsupported src → R dest: {src_type}")
-            self.env.registers[dest_val] = value
-            # 写入普通 R 寄存器后，更新标志位（模仿算术指令）
-            self._set_flags(value)
-        elif dest_type == 'PC':
-            old_pc = self.env.pc
-            if src_type == 'imm' and src_val == 0:
-                # 特殊语义：结束当前 shot
-                self.env.shot_completed = True
-                # print("MOV PC,0 detected → marking current shot as completed")
-                return
-            else:
-                # 跳转到 PC
-                if src_type == 'R':
-                    self.env.pc = int(self.env.registers[src_val])
-                elif src_type == 'imm':
-                    self.env.pc = int(src_val)
-                elif src_type == 'LR':
-                    self.env.pc = self.env.lr
-                    # print(f"MOV PC, LR → jumping to {self.env.pc} (LR value is {self.env.lr})")
-                elif src_type in {'SF', 'ZF'}:
-                    raise XQIExecutionError("Cannot MOV SF/ZF directly to PC")
-                else:
-                    raise XQIExecutionError(f"Unsupported src → PC: {src_type}")
-                new_pc = self.env.pc
-                # print(f"PC ← {src_str} (value={new_pc}, old_pc was {old_pc}, LR={self.env.lr})")
-                # PC 变更不更新标志位
-        elif dest_type == 'LR':
-            # 设置链接寄存器
-            if src_type == 'R':
-                self.env.lr = int(self.env.registers[src_val])
-            elif src_type == 'imm':
-                self.env.lr = int(src_val)
-            elif src_type == 'PC':
-                self.env.lr = self.env.pc
-            elif src_type in {'SF', 'ZF'}:
-                raise XQIExecutionError("Cannot MOV SF/ZF directly to LR")
-            else:
-                raise XQIExecutionError(f"Unsupported src → LR: {src_type}")
-            # LR 变更不更新标志位
-        elif dest_type == 'SF':
-            # 直接设置符号标志
-            if src_type == 'imm':
-                val = int(src_val)
-            elif src_type == 'R':
-                val = int(self.env.registers[src_val])
-            elif src_type in {'PC', 'LR'}:
-                raise XQIExecutionError("Cannot MOV PC/LR to SF")
-            else:
-                val = int(src_val) # SF/ZF
-            self.env.SF = 1 if val != 0 else 0 # 通常 SF=1 表示负数，这里简化处理为非零即1
-        elif dest_type == 'ZF':
-            # 直接设置零标志
-            if src_type == 'imm':
-                val = int(src_val)
-            elif src_type == 'R':
-                val = int(self.env.registers[src_val])
-            elif src_type in {'PC', 'LR'}:
-                raise XQIExecutionError("Cannot MOV PC/LR to ZF")
-            else:
-                val = int(src_val)
-            self.env.ZF = 1 if val == 0 else 0
-        else:
-            raise XQIExecutionError(f"Unsupported destination type: {dest_type}")
-        # 调试输出
-        # print(f"MOV {dest_str} <- {src_str} completed.")
+        ops = self._require_operands(node, "MOV", 2, "dest, src")
+        dest_type, dest_val = self._parse_mov_dest(ops[0].value.strip())
+        src_type, src_val = self._parse_mov_src(ops[1].value.strip())
+        # 目标类型二级分派(R / PC / LR / SF / ZF)
+        handler = {
+            'R': self._mov_to_r,
+            'PC': self._mov_to_pc,
+            'LR': self._mov_to_lr,
+            'SF': self._mov_to_sf,
+            'ZF': self._mov_to_zf,
+        }[dest_type]
+        handler(dest_val, src_type, src_val)
+
     def execute_u3(self, node):
         # 1. 解析参数
         theta = self._parse_parameter(node.children[1].children[0], 'R')
