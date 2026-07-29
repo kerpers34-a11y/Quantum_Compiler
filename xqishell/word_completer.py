@@ -1,3 +1,6 @@
 from prompt_toolkit.completion import WordCompleter
 
-opcode_completer = WordCompleter(["XQI-BEGIN", "XQI-END", "shot", "error", "ERR", "U3", "measure", "CNOT", "CMP", "GPS", "MOV", "B", "BX", "BL", "BEQ", "BNE", "BGT", "BGE", "BLT", "BLE", "ADD", "SUB", "MUL", "DIV", "LDR", "STR", "CLDR", "CSTR", "qreg", "creg", "reset", "debug", "debug-p", "rand", "barrier"])
+from xqishell.instructions import BLOCK_MARKERS, INSTRUCTIONS
+
+# Tab 补全词表:块标记 + 全部指令(单一数据源)
+opcode_completer = WordCompleter([*BLOCK_MARKERS, *INSTRUCTIONS])

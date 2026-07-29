@@ -1,17 +1,7 @@
 from xqishell import config
-class ASTNode:
-    """ 抽象语法树的通用节点 """
-    def __init__(self, type_, value=None, children=None, line=None, col=None):
-        self.type = type_
-        self.value = value
-        self.children = children or []
-        self.line = line
-        self.col = col
+from xqishell.errors import XQISyntaxError
+from xqishell.ast_nodes import ASTNode  # noqa: F401  # re-export,兼容 `from xqishell.parser import ASTNode`
 
-    def __repr__(self):
-        children_repr = [str(child) if isinstance(child, ASTNode) else repr(child)
-                        for child in self.children]
-        return f"ASTNode('{self.type}', value={self.value}, children=[{', '.join(children_repr)}])"
 
 class Parser:
     def __init__(self, lexer, source_path=None):
@@ -30,7 +20,7 @@ class Parser:
             self.current_token = self.lexer.next_token()
             return token
         else:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"语法错误: 期望 {token_type}, 但得到 {self.current_token[1]} (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
     def program(self):
@@ -41,7 +31,7 @@ class Parser:
         if self.current_token[0] == 'XQI_BEGIN':
             program_node.children.append(self.xqi_begin())
         else:
-            raise SyntaxError(f"程序必须以 XQI-BEGIN 开始 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            raise XQISyntaxError(f"程序必须以 XQI-BEGIN 开始 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
         # 标记是否找到 shot 和 error
         found_shot = False
@@ -79,9 +69,9 @@ class Parser:
 
         # 如果没有找到 shot 或 error，抛出错误
         if not found_shot:
-            raise SyntaxError(f"程序缺少 'shot' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            raise XQISyntaxError(f"程序缺少 'shot' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
         if not found_error:
-            raise SyntaxError(f"程序缺少 'error' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            raise XQISyntaxError(f"程序缺少 'error' 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
         # 继续解析其他语句
         while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
@@ -99,7 +89,7 @@ class Parser:
         if self.current_token[0] == 'XQI_END':
             program_node.children.append(self.xqi_end())  # 调用 xqi_end 方法
         else:
-            raise SyntaxError(f"程序必须以 XQI-END 结束 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+            raise XQISyntaxError(f"程序必须以 XQI-END 结束 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
         return program_node
 
@@ -130,7 +120,7 @@ class Parser:
         elif self.current_token[0] == 'XQI_END':  # 直接返回，不进入 statement() 解析
             return None
         elif self.current_token[0] == 'ARROW':  # 发现孤立的 `->` 说明前面解析错误
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"孤立的 '->' 语法错误，可能缺少 `measure` 指令 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
         elif self.current_token[0] == 'ASSIGN':  # 处理单个的分号
             # 检查前一个 token 是否与当前 `ASSIGN` 在同一行
@@ -149,12 +139,12 @@ class Parser:
                     self.eat('ASSIGN')
                     return None
             else:
-                raise SyntaxError(
+                raise XQISyntaxError(
                     f"无效的语句: {self.current_token[1]} (行 {self.current_token[2]}, 列 {self.current_token[3]})")
         elif self.current_token[0] == 'EOF':  # 处理 EOF
             return None
         else:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"无效的语句: {self.current_token[1]} (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
     def process_definition(self):
@@ -186,7 +176,7 @@ class Parser:
 
             # 检查并消耗 ARROW
             if self.current_token[0] != 'ARROW':
-                raise SyntaxError(f"measure指令缺少 -> (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+                raise XQISyntaxError(f"measure指令缺少 -> (行 {self.current_token[2]}, 列 {self.current_token[3]})")
             self.eat('ARROW')
 
             dest = self.operand()  # 解析经典寄存器
@@ -198,7 +188,7 @@ class Parser:
 
             # 确保后续没有多余的操作数或逗号
             while self.current_token[0] != 'ASSIGN' and self.current_token[0] != 'EOF':
-                raise SyntaxError(f"measure指令参数过多 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
+                raise XQISyntaxError(f"measure指令参数过多 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
 
             self.eat('ASSIGN')
             return node
@@ -206,7 +196,7 @@ class Parser:
             # 解析 shot 操作数
             operands_node = self.operand_list()
             if len(operands_node.children) != 1 or not operands_node.children[0].value.isdigit() or int(operands_node.children[0].value) <= 0:
-                raise SyntaxError(
+                raise XQISyntaxError(
                     f"语法错误: shot 后面必须且仅能接一个正整数 (行 {self.current_token[2]}, 列 {self.current_token[3]})")
             node.children = [opcode_node, operands_node]
         elif opcode_node.value == "error":
@@ -245,13 +235,13 @@ class Parser:
     def handle_err_instruction(self, node, opcode_node):
         """ 增强版 ERR 处理：支持多参数物理模型 """
         if self.last_valid_opcode not in ('U3', 'CNOT'):
-            raise SyntaxError(f"ERR 必须紧跟在 U3 或 CNOT 之后 (行 {opcode_node.line})")
+            raise XQISyntaxError(f"ERR 必须紧跟在 U3 或 CNOT 之后 (行 {opcode_node.line})")
 
         operands_node = self.operand_list()
         all_ops = operands_node.children
 
         if len(all_ops) < 3:  # 最简格式: ERR(model, code) q[n]
-            raise SyntaxError(f"ERR 指令参数不足 (行 {opcode_node.line})")
+            raise XQISyntaxError(f"ERR 指令参数不足 (行 {opcode_node.line})")
 
         # 1. 验证模型 (model)
         model_node = all_ops[0]
@@ -266,13 +256,13 @@ class Parser:
                 break
 
         if qreg_start_idx == -1:
-            raise SyntaxError(f"ERR 指令缺少目标量子寄存器 q[...] (行 {opcode_node.line})")
+            raise XQISyntaxError(f"ERR 指令缺少目标量子寄存器 q[...] (行 {opcode_node.line})")
 
         # 3. 校验物理参数部分 (model, code 之后的参数)
         # 如果是 4, 5, 6 模型，通常后面跟着 3 个物理参数
         param_count = qreg_start_idx - 2  # 减去 model 和 code
         if model_type in (4, 5, 6) and param_count < 3:
-            raise SyntaxError(f"模型 {model_type} 需要 3 个物理参数 (行 {opcode_node.line})")
+            raise XQISyntaxError(f"模型 {model_type} 需要 3 个物理参数 (行 {opcode_node.line})")
 
         # 验证所有 q[...] 范围
         for qreg in all_ops[qreg_start_idx:]:
@@ -297,12 +287,12 @@ class Parser:
             if model_val not in {1, 2, 3, 4, 5, 6}:
                 raise ValueError
         except ValueError:
-            raise SyntaxError(f"错误模型值必须为 1-6 之间的整数 (当前:{node.value} 行 {node.line})")
+            raise XQISyntaxError(f"错误模型值必须为 1-6 之间的整数 (当前:{node.value} 行 {node.line})")
 
     @staticmethod
     def validate_err_code(node):
         if not node.value.isdigit() or not (0 <= int(node.value) <= 9):
-            raise SyntaxError(f"错误代码必须0-9 (当前:{node.value} 行 {node.line})")
+            raise XQISyntaxError(f"错误代码必须0-9 (当前:{node.value} 行 {node.line})")
 
     @staticmethod
     def validate_err_probability(node):
@@ -311,7 +301,7 @@ class Parser:
             if not 0.0 <= prob <= 1.0:
                 raise ValueError
         except ValueError:
-            raise SyntaxError(f"概率值必须0.0-1.0 (当前:{node.value} 行 {node.line})")
+            raise XQISyntaxError(f"概率值必须0.0-1.0 (当前:{node.value} 行 {node.line})")
 
     def opcode(self):
         """ 解析操作码 """
@@ -321,7 +311,7 @@ class Parser:
             self.eat('OPCODE')
             return node
         else:
-            raise SyntaxError(f"语法错误: 期望操作码，但得到 {token[0]} (行 {token[2]}, 列 {token[3]})")
+            raise XQISyntaxError(f"语法错误: 期望操作码，但得到 {token[0]} (行 {token[2]}, 列 {token[3]})")
 
     def operand_list(self):
         """ 解析操作数列表，生成扁平化结构 """
@@ -339,12 +329,12 @@ class Parser:
                 if self.current_token[0] == 'COMMA':
                     self.eat('COMMA')
                 elif self.current_token[0] not in ('RPAREN', 'EOF'):
-                    raise SyntaxError(
+                    raise XQISyntaxError(
                         f"缺少逗号分隔符 (行 {self.current_token[2]}, 列 {self.current_token[3]})"
                     )
 
             if self.current_token[0] != 'RPAREN':
-                raise SyntaxError(f"未闭合的括号 (行 {operands_node.line})")
+                raise XQISyntaxError(f"未闭合的括号 (行 {operands_node.line})")
             self.eat('RPAREN')
 
         # 处理主操作数（量子寄存器/经典寄存器等）
@@ -370,25 +360,25 @@ class Parser:
             # 提取 R[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])  # 提取并转换为整数
             if register_number < 0 or register_number >= config.MAX_REGISTER:
-                raise SyntaxError(f"语法错误: R[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+                raise XQISyntaxError(f"语法错误: R[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"R[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_M':
             # 提取 M[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])
             if register_number < 0 or register_number >= config.MAX_MEMORY:
-                raise SyntaxError(f"语法错误: M[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+                raise XQISyntaxError(f"语法错误: M[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"M[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_C':
             # 提取 c[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])
             if register_number < 0 or register_number >= config.MAX_CLASSICAL_REGISTER:
-                raise SyntaxError(f"语法错误: c[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+                raise XQISyntaxError(f"语法错误: c[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"c[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_Q':
             # 提取 q[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])
             if register_number < 0 or register_number >= config.MAX_QUBITS:
-                raise SyntaxError(f"语法错误: q[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
+                raise XQISyntaxError(f"语法错误: q[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"q[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_LR':
             node = ASTNode("Operand", "LR", line=token[2], col=token[3])
@@ -403,7 +393,7 @@ class Parser:
         elif token[0] == 'LABEL':
             node = ASTNode("Label", token[1], line=token[2], col=token[3])  # 标签
         else:
-            raise SyntaxError(f"语法错误: 未知的操作数类型 {token[0]} (行 {token[2]}, 列 {token[3]})")
+            raise XQISyntaxError(f"语法错误: 未知的操作数类型 {token[0]} (行 {token[2]}, 列 {token[3]})")
         self.eat(token[0])
         return node
 
@@ -434,25 +424,25 @@ class Parser:
         for op in operands:
             if isinstance(op, ASTNode) and op.type == "Operand":
                 if op.value.startswith(('q[', 'c[', 'M[')):
-                    raise SyntaxError(f"MOV指令禁止使用 {op.value} 寄存器 (行 {op.line})")
+                    raise XQISyntaxError(f"MOV指令禁止使用 {op.value} 寄存器 (行 {op.line})")
 
     @staticmethod
     def validate_measure_operands(operands):
         """ 验证 measure 指令操作数（已确保 -> 存在，AST 不包含它）"""
         if len(operands) != 2:
-            raise SyntaxError(f"measure指令需要两个操作数，当前数量 {len(operands)}")
+            raise XQISyntaxError(f"measure指令需要两个操作数，当前数量 {len(operands)}")
 
         q_register, c_register = operands[0], operands[1]
 
         if not q_register.value.startswith('q['):
-            raise SyntaxError(f"measure源操作数必须是量子寄存器 (行 {q_register.line})")
+            raise XQISyntaxError(f"measure源操作数必须是量子寄存器 (行 {q_register.line})")
         if not c_register.value.startswith('c['):
-            raise SyntaxError(f"measure目标操作数必须是经典寄存器 (行 {c_register.line})")
+            raise XQISyntaxError(f"measure目标操作数必须是经典寄存器 (行 {c_register.line})")
 
     def validate_u3_operands(self, operands):
         # 参数数量验证
         if len(operands) != 4:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"U3指令需要3个参数和1个量子寄存器，当前参数数 {len(operands)} (行 {self.current_token[2]})")
 
         # 参数类型验证（前三个参数）
@@ -465,7 +455,7 @@ class Parser:
 
         for idx, param in enumerate(operands[:3]):
             if not any(check(param) for check in valid_param_types.values()):
-                raise SyntaxError(
+                raise XQISyntaxError(
                     f"U3参数{idx + 1}类型错误: {param.value}\n"
                     f"允许类型: 数字/立即数/经典寄存器 (行 {param.line})"
                 )
@@ -477,7 +467,7 @@ class Parser:
         # 量子寄存器验证
         q_register = operands[3]
         if not q_register.value.startswith('q['):
-            raise SyntaxError(f"U3目标必须是量子寄存器 (行 {q_register.line})")
+            raise XQISyntaxError(f"U3目标必须是量子寄存器 (行 {q_register.line})")
         self.validate_qubit_register(q_register)
 
     @staticmethod
@@ -486,17 +476,17 @@ class Parser:
         支持 Code 1, 2, 3, 4, 5, 6
         """
         if len(operands) < 1:
-            raise SyntaxError("error 指令至少需要一个参数：TRUE 或 FALSE")
+            raise XQISyntaxError("error 指令至少需要一个参数：TRUE 或 FALSE")
 
         # 增加上限到 7 (enable, code, p1, p2, p3, p_measure, p_reset)
         if len(operands) > 7:
-            raise SyntaxError(f"error 指令最多允许 7 个参数，当前收到 {len(operands)} 个")
+            raise XQISyntaxError(f"error 指令最多允许 7 个参数，当前收到 {len(operands)} 个")
 
         enable_node = operands[0]
         enable_val = enable_node.value.strip().upper()
 
         if enable_val not in ('TRUE', 'FALSE', '1', '0'):
-            raise SyntaxError(f"error 第一个参数必须是 TRUE/FALSE/1/0")
+            raise XQISyntaxError(f"error 第一个参数必须是 TRUE/FALSE/1/0")
 
         if enable_val in ('FALSE', '0'):
             return True
@@ -507,32 +497,32 @@ class Parser:
             try:
                 code = int(code_node.value)
             except ValueError:
-                raise SyntaxError(f"error code 必须是整数 (行 {code_node.line})")
+                raise XQISyntaxError(f"error code 必须是整数 (行 {code_node.line})")
 
             # 统一校验所有概率/物理参数是否为有效数字
             for i, op in enumerate(operands[2:], start=3):
                 try:
                     float(op.value)
                 except ValueError:
-                    raise SyntaxError(f"error 第 {i} 个参数必须是数字 (行 {op.line})")
+                    raise XQISyntaxError(f"error 第 {i} 个参数必须是数字 (行 {op.line})")
 
         return True
 
     def validate_gps_operands(self, operands):
         """ 验证GPS指令格式：GPS(delta) q[m]; """
         if len(operands) != 2:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"GPS指令需要2个操作数，当前数量 {len(operands)} (行 {self.current_token[2]})"
             )
         # 提取两个操作数
         delta_operand, q_operand = operands[0], operands[1]
         # 验证参数部分：delta 可以是立即数或 R 寄存器，但不能是量子寄存器
         if delta_operand.value.startswith('q['):
-            raise SyntaxError(f"GPS参数delta不能是量子寄存器 (行 {delta_operand.line})")
+            raise XQISyntaxError(f"GPS参数delta不能是量子寄存器 (行 {delta_operand.line})")
 
         # 验证操作数部分：第二个操作数必须是量子寄存器
         if not q_operand.value.startswith('q['):
-            raise SyntaxError(f"GPS第二个操作数必须是量子寄存器 (行 {self.current_token[2]})")
+            raise XQISyntaxError(f"GPS第二个操作数必须是量子寄存器 (行 {self.current_token[2]})")
 
         # 验证寄存器范围
         self.validate_qubit_register(q_operand)
@@ -541,7 +531,7 @@ class Parser:
         """ 验证CNOT指令操作数结构 """
         # 验证操作数数量
         if len(operands) != 2:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"CNOT需要2个量子寄存器，检测到 {len(operands)} 个操作数\n"
                 f"错误位置：行 {self.current_token[2]} 列 {self.current_token[3]}"
             )
@@ -549,7 +539,7 @@ class Parser:
         # 类型和格式验证
         for idx, op in enumerate(operands, 1):
             if not isinstance(op, ASTNode) or not op.value.startswith('q['):
-                raise SyntaxError(
+                raise XQISyntaxError(
                     f"操作数 {idx} 类型错误: 期望量子寄存器，实际得到 {op.value}\n"
                     f"错误位置：行 {op.line} 列 {op.col}"
                 )
@@ -563,7 +553,7 @@ class Parser:
 
         # 验证控制位和目标位不同
         if control_qubit == target_qubit:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"CNOT控制位和目标位不能相同\n"
                 f"冲突寄存器: q[{control_qubit}]\n"
                 f"错误位置：行 {operands[0].line} 和 行 {operands[1].line}"
@@ -627,7 +617,7 @@ class Parser:
             if not (0 <= reg_num < max_reg):
                 raise ValueError
         except ValueError:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"寄存器越界: {value} (允许范围 0-{max_reg - 1}) (行 {node.line})"
             )
 
@@ -639,7 +629,7 @@ class Parser:
             if not (0 <= reg_num < config.MAX_QUBITS):
                 raise ValueError
         except ValueError:
-            raise SyntaxError(
+            raise XQISyntaxError(
                 f"量子寄存器越界: {node.value} (允许范围 0-{config.MAX_QUBITS - 1}) (行 {node.line})"
             )
 
@@ -647,16 +637,16 @@ class Parser:
     def validate_classical_arithmetic_operands(operands):
         for op in operands:
             if isinstance(op, ASTNode) and op.type == "Operand" and op.value.startswith('q['):
-                raise SyntaxError(f"经典算术指令禁止使用量子寄存器 (行 {op.line})")
+                raise XQISyntaxError(f"经典算术指令禁止使用量子寄存器 (行 {op.line})")
 
     @staticmethod
     def validate_cldr_cstr_operands(opcode, operands):
         if len(operands) < 2:
-            raise SyntaxError(f"{opcode}需要两个操作数")
+            raise XQISyntaxError(f"{opcode}需要两个操作数")
         first, second = operands[0], operands[1]
         if opcode == "CLDR":
             if not first.value.startswith('c[') or not second.value.startswith('M['):
-                raise SyntaxError(f"CLDR格式应为c[X], M[Y] (行 {first.line})")
+                raise XQISyntaxError(f"CLDR格式应为c[X], M[Y] (行 {first.line})")
         elif opcode == "CSTR":
             if not first.value.startswith('c[') or not second.value.startswith('M['):
-                raise SyntaxError(f"CSTR格式应为c[X], M[Y] (行 {first.line})")
+                raise XQISyntaxError(f"CSTR格式应为c[X], M[Y] (行 {first.line})")

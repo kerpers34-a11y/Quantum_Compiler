@@ -1,13 +1,18 @@
 import re
 from collections import deque
 
+from xqishell.instructions import opcode_alternation
 from xqishell.tokens import Token
+from xqishell.errors import XQISyntaxError
+
+# 指令交替串(长度降序防前缀遮蔽,'-' 转义)
+_OPCODE_ALT = opcode_alternation().replace('-', r'\-')
 
 token_map = [
     ('COMMENT', r'\;[^\n]*'),  # 注释：以 ';' 开始直到换行
     ('XQI_BEGIN', r'XQI\-BEGIN'),
     ('XQI_END', r'XQI\-END'),
-    ('OPCODE', r'(?<!\w)(shot|error|ERR|U3|measure|CNOT|CMP|GPS|MOV|B|BX|BL|BEQ|BNE|BGT|BGE|BLT|BLE|ADD|SUB|MUL|DIV|LDR|STR|CLDR|CSTR|qreg|creg|reset|debug|debug\-p|rand|barrier)(?=\W)'),
+    ('OPCODE', rf'(?<!\w)({_OPCODE_ALT})(?=\W)'),
     ('REGISTER', r'R\[\d+\]'),  # R[n]寄存器
     ('REGISTER_M', r'M\[\d+\]'),  # M[n]寄存器
     ('REGISTER_C', r'c\[\d+\]'),  # c[n]寄存器
@@ -53,11 +58,11 @@ class DebugInfoGenerator:
                 self.xqi_end_line = idx
 
         if self.xqi_begin_line is None:
-            raise ValueError("Missing XQI-BEGIN declaration")
+            raise XQISyntaxError("Missing XQI-BEGIN declaration")
         if self.xqi_end_line is None:
-            raise ValueError("Missing XQI-END declaration")
+            raise XQISyntaxError("Missing XQI-END declaration")
         if self.xqi_begin_line >= self.xqi_end_line:
-            raise ValueError("XQI-BEGIN must come before XQI-END")
+            raise XQISyntaxError("XQI-BEGIN must come before XQI-END")
 
     def _process_single_line(self, raw_line):
         """处理单行内容并返回需要显示的信息"""
@@ -154,7 +159,7 @@ class XQILexer:
         has_begin = any(t[0] == 'XQI_BEGIN' for t in self.tokens)
         has_end = any(t[0] == 'XQI_END' for t in self.tokens)
         if not has_begin or not has_end:
-            raise ValueError("Missing XQI boundary markers")
+            raise XQISyntaxError("Missing XQI boundary markers")
 
     def _tokenize(self):
         line = 1
@@ -175,7 +180,7 @@ class XQILexer:
                 col += len(value)
                 continue
             elif kind == 'MISMATCH':
-                raise ValueError(f"非法字符: {value} (行 {line}, 列 {col})")
+                raise XQISyntaxError(f"非法字符: {value} (行 {line}, 列 {col})")
             self.tokens.append(Token(kind, value, line, col))
             col += len(value)
         # 确保 `;` 始终作为单独的 Token

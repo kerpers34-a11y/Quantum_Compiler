@@ -86,3 +86,17 @@ def test_b9_parser_no_hang_on_missing_error_with_labels():
         pytest.fail("parser 在缺少 error 声明且含标签的程序上死循环(挂死超过 15s)")
     assert result.returncode != 0
     assert "error" in result.stderr
+
+
+@pytest.mark.bug
+def test_b10_debug_p_not_shadowed_by_debug():
+    """debug-p 必须词法为独立 OPCODE,而不是被 'debug' 前缀遮蔽后报非法字符。
+
+    词法正则交替表中 'debug' 原排在 'debug-p' 之前,配合 (?=\\W) 断言
+    ('-' 是非单词字符,断言恒真),'debug-p;' 先匹配出 'debug',
+    剩余 '-p' 触发「非法字符: -」。
+    """
+    src = wrap("debug-p;")
+    lexer = XQILexer(src)
+    opcodes = [t.value for t in lexer.tokens if t.type == "OPCODE"]
+    assert "debug-p" in opcodes

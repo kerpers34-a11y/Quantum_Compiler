@@ -2,23 +2,19 @@ import os
 import struct
 import numpy as np
 from xqishell import config
-class ASTNode:
-    def __init__(self, type, value=None, children=None, line=None, col=None):
-        self.type = type
-        self.value = value if value is not None else []
-        self.children = children if children is not None else []
-        self.line = line
-        self.col = col
+from xqishell.ast_nodes import ASTNode  # noqa: F401  # re-export,兼容 `from xqishell.evaluator import ASTNode`
+from xqishell.errors import XQIExecutionError, XQIInstructionError
 
-class InstructionError(ValueError):
-    def __init__(self, instr_name, msg):
-        super().__init__(f"[{instr_name}] {msg}")
+# 兼容旧名(旧的 InstructionError(ValueError) 由错误体系中的等价类取代)
+InstructionError = XQIInstructionError
+
+
 class QuantumEnvironment:
     def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_REGISTER,
                  max_memory=config.MAX_MEMORY, simulation_mode='statevector', seed=None):
         # 基础参数
         if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
-            raise ValueError("Register sizes must be non-negative integers")
+            raise XQIExecutionError("Register sizes must be non-negative integers")
         self.qreg_size = qreg_size
         self.creg_size = creg_size
         self.simulation_mode = simulation_mode.lower()
@@ -507,7 +503,7 @@ class Evaluator:
         # 1. 提取 Operands 子节点
         operands_node = next((c for c in instruction_node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
-            raise ValueError("error instruction requires at least the enable parameter")
+            raise XQIExecutionError("error instruction requires at least the enable parameter")
 
         operands = operands_node.children
 
@@ -518,7 +514,7 @@ class Evaluator:
         elif enable_str in ['FALSE', '0']:
             enable = False
         else:
-            raise ValueError("First parameter must be TRUE/FALSE or 1/0")
+            raise XQIExecutionError("First parameter must be TRUE/FALSE or 1/0")
 
         # 如果关闭错误模型，直接返回
         if not enable:
@@ -617,7 +613,7 @@ class Evaluator:
         """
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("MOV instruction requires 2 operands")
+            raise XQIExecutionError("MOV instruction requires 2 operands")
         dest_str = operands_node.children[0].value.strip()
         src_str = operands_node.children[1].value.strip()
         # 解析目标
@@ -629,11 +625,11 @@ class Evaluator:
             try:
                 dest_val = int(dest_str[2:-1])
             except ValueError:
-                raise ValueError(f"Invalid R register format: {dest_str}") from None
+                raise XQIExecutionError(f"Invalid R register format: {dest_str}") from None
             if dest_val < 0 or dest_val >= len(self.env.registers):
-                raise ValueError(f"R[{dest_val}] out of range")
+                raise XQIExecutionError(f"R[{dest_val}] out of range")
         else:
-            raise ValueError(f"Unsupported destination: {dest_str}")
+            raise XQIExecutionError(f"Unsupported destination: {dest_str}")
         # 解析源（支持立即数、R寄存器、PC、LR）
         if src_str in {'PC', 'LR', 'SF', 'ZF'}:
             src_type = src_str
@@ -643,9 +639,9 @@ class Evaluator:
             try:
                 src_val = int(src_str[2:-1])
             except ValueError:
-                raise ValueError(f"Invalid source R register: {src_str}") from None
+                raise XQIExecutionError(f"Invalid source R register: {src_str}") from None
             if src_val < 0 or src_val >= len(self.env.registers):
-                raise ValueError(f"Source R[{src_val}] out of range")
+                raise XQIExecutionError(f"Source R[{src_val}] out of range")
         elif src_str.isdigit() or (src_str.lstrip('-').isdigit()):
             src_type = 'imm'
             src_val = int(src_str) # 优先尝试整数
@@ -653,7 +649,7 @@ class Evaluator:
             src_type = 'imm'
             src_val = float(src_str) # 浮点数
         else:
-            raise ValueError(f"Unsupported source operand: {src_str}")
+            raise XQIExecutionError(f"Unsupported source operand: {src_str}")
         # 执行 MOV
         if dest_type == 'R':
             # 普通寄存器目标
@@ -670,7 +666,7 @@ class Evaluator:
             elif src_type == 'ZF':
                 value = float(self.env.ZF)
             else:
-                raise ValueError(f"Unsupported src → R dest: {src_type}")
+                raise XQIExecutionError(f"Unsupported src → R dest: {src_type}")
             self.env.registers[dest_val] = value
             # 写入普通 R 寄存器后，更新标志位（模仿算术指令）
             self._set_flags(value)
@@ -691,9 +687,9 @@ class Evaluator:
                     self.env.pc = self.env.lr
                     # print(f"MOV PC, LR → jumping to {self.env.pc} (LR value is {self.env.lr})")
                 elif src_type in {'SF', 'ZF'}:
-                    raise ValueError("Cannot MOV SF/ZF directly to PC")
+                    raise XQIExecutionError("Cannot MOV SF/ZF directly to PC")
                 else:
-                    raise ValueError(f"Unsupported src → PC: {src_type}")
+                    raise XQIExecutionError(f"Unsupported src → PC: {src_type}")
                 new_pc = self.env.pc
                 # print(f"PC ← {src_str} (value={new_pc}, old_pc was {old_pc}, LR={self.env.lr})")
                 # PC 变更不更新标志位
@@ -706,9 +702,9 @@ class Evaluator:
             elif src_type == 'PC':
                 self.env.lr = self.env.pc
             elif src_type in {'SF', 'ZF'}:
-                raise ValueError("Cannot MOV SF/ZF directly to LR")
+                raise XQIExecutionError("Cannot MOV SF/ZF directly to LR")
             else:
-                raise ValueError(f"Unsupported src → LR: {src_type}")
+                raise XQIExecutionError(f"Unsupported src → LR: {src_type}")
             # LR 变更不更新标志位
         elif dest_type == 'SF':
             # 直接设置符号标志
@@ -717,7 +713,7 @@ class Evaluator:
             elif src_type == 'R':
                 val = int(self.env.registers[src_val])
             elif src_type in {'PC', 'LR'}:
-                raise ValueError("Cannot MOV PC/LR to SF")
+                raise XQIExecutionError("Cannot MOV PC/LR to SF")
             else:
                 val = int(src_val) # SF/ZF
             self.env.SF = 1 if val != 0 else 0 # 通常 SF=1 表示负数，这里简化处理为非零即1
@@ -728,12 +724,12 @@ class Evaluator:
             elif src_type == 'R':
                 val = int(self.env.registers[src_val])
             elif src_type in {'PC', 'LR'}:
-                raise ValueError("Cannot MOV PC/LR to ZF")
+                raise XQIExecutionError("Cannot MOV PC/LR to ZF")
             else:
                 val = int(src_val)
             self.env.ZF = 1 if val == 0 else 0
         else:
-            raise ValueError(f"Unsupported destination type: {dest_type}")
+            raise XQIExecutionError(f"Unsupported destination type: {dest_type}")
         # 调试输出
         # print(f"MOV {dest_str} <- {src_str} completed.")
     def execute_u3(self, node):
@@ -775,7 +771,7 @@ class Evaluator:
     def execute_gps(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("GPS requires delta and qubit parameters")
+            raise XQIExecutionError("GPS requires delta and qubit parameters")
         # 解析delta参数（支持立即数或R寄存器）
         delta = self._parse_parameter(operands_node.children[0], 'R')
         # 验证第二个参数格式（q寄存器）
@@ -908,23 +904,23 @@ class Evaluator:
     def _parse_single_register(self, reg_str, prefix):
         # 带详细错误信息的解析
         if not reg_str.startswith(prefix):
-            raise ValueError(f"Expected {prefix} register, got {reg_str}")
+            raise XQIExecutionError(f"Expected {prefix} register, got {reg_str}")
         try:
             index = int(reg_str[len(prefix) + 1:-1]) # 解析类似 q[5] 的格式
         except (ValueError, IndexError):
-            raise ValueError(f"Invalid register format: {reg_str}")
+            raise XQIExecutionError(f"Invalid register format: {reg_str}")
         # 寄存器范围检查
         max_size = self.env.qreg_size if prefix == 'q' else \
             len(self.env.registers) if prefix == 'R' else \
                 len(self.env.creg)
         if index >= max_size:
-            raise ValueError(f"{prefix} register index out of range: {index} (max={max_size - 1})")
+            raise XQIExecutionError(f"{prefix} register index out of range: {index} (max={max_size - 1})")
         return index
     def _execute_binary_arithmetic(self, node, operation):
         operands = node.children[1].children
         # print(f"[{operation.upper()}] raw operands: {[op.value for op in operands]}")
         if len(operands) < 3:
-            raise ValueError(f"{operation.upper()} needs 3 operands")
+            raise XQIExecutionError(f"{operation.upper()} needs 3 operands")
         dest_idx = self._parse_register_index(operands[0].value, 'R')
         src1_parsed = self._parse_operand(operands[1].value)
         src2_parsed = self._parse_operand(operands[2].value)
@@ -946,10 +942,10 @@ class Evaluator:
             result = val1 * val2
         elif operation == 'div':
             if abs(val2) < 1e-12:
-                raise ValueError("Division by zero")
+                raise XQIExecutionError("Division by zero")
             result = val1 / val2
         else:
-            raise ValueError(f"Unknown operation: {operation}")
+            raise XQIExecutionError(f"Unknown operation: {operation}")
         self.env.registers[dest_idx] = result
         self._set_flags(result)
     def _parse_operand(self, operand_str):
@@ -968,7 +964,7 @@ class Evaluator:
                 else:
                     return int(operand_str)
             except ValueError:
-                raise ValueError(f"Cannot parse operand: {operand_str}")
+                raise XQIExecutionError(f"Cannot parse operand: {operand_str}")
     # 通用标志位设置方法
     def _set_flags(self, value):
         self.env.SF = 1 if value < 0 else 0
@@ -997,7 +993,7 @@ class Evaluator:
     def execute_ldr(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("LDR requires 2 operands (dest_reg, src_mem)")
+            raise XQIExecutionError("LDR requires 2 operands (dest_reg, src_mem)")
         # 解析目标寄存器 R[...]
         dest_reg = self._parse_register_index(operands_node.children[0].value, 'R')
         # 解析源内存地址 M[...]
@@ -1007,7 +1003,7 @@ class Evaluator:
     def execute_str(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("STR requires 2 operands (src_reg, dest_mem)")
+            raise XQIExecutionError("STR requires 2 operands (src_reg, dest_mem)")
         # 解析源寄存器 R[...]
         src_reg = self._parse_register_index(operands_node.children[0].value, 'R')
         # 解析目标内存地址 M[...]
@@ -1017,7 +1013,7 @@ class Evaluator:
     def execute_cldr(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 3:
-            raise ValueError("CLDR requires 3 operands (dest_creg, real_mem, imag_mem)")
+            raise XQIExecutionError("CLDR requires 3 operands (dest_creg, real_mem, imag_mem)")
         # 解析目标经典寄存器 c[...]
         dest_creg = self._parse_register_index(operands_node.children[0].value, 'c')
         # 解析实部和虚部内存地址
@@ -1031,7 +1027,7 @@ class Evaluator:
     def execute_cstr(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 3:
-            raise ValueError("CSTR requires 3 operands (src_creg, real_mem, imag_mem)")
+            raise XQIExecutionError("CSTR requires 3 operands (src_creg, real_mem, imag_mem)")
         # 解析源经典寄存器 c[...]
         src_creg = self._parse_register_index(operands_node.children[0].value, 'c')
         # 解析目标内存地址
@@ -1047,15 +1043,15 @@ class Evaluator:
         """从分支指令节点解析标签操作数"""
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
-            raise ValueError(f"{node.children[0].value} instruction missing label operand")
+            raise XQIExecutionError(f"{node.children[0].value} instruction missing label operand")
         label_operand = operands_node.children[0]
         if label_operand.type != 'Label':
-            raise ValueError(f"Expected label operand, got {label_operand.type}")
+            raise XQIExecutionError(f"Expected label operand, got {label_operand.type}")
         return label_operand.value.strip(':') # 去除可能存在的冒号
     def _get_label_address(self, label):
         label = label.strip(':')
         if label not in self.labels:
-            raise ValueError(f"Undefined label: {label}")
+            raise XQIExecutionError(f"Undefined label: {label}")
         return self.labels[label]
     # 条件检查方法 -----------------------------------------------
     def _condition_met(self, condition_type):
@@ -1080,7 +1076,7 @@ class Evaluator:
         """
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("CMP requires 2 operands")
+            raise XQIExecutionError("CMP requires 2 operands")
         val1 = self._parse_parameter(operands_node.children[0], 'R')
         val2 = self._parse_parameter(operands_node.children[1], 'R')
         self._set_flags(val1 - val2)
@@ -1092,10 +1088,10 @@ class Evaluator:
         """
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or not operands_node.children:
-            raise ValueError("BX requires an operand (only LR is supported)")
+            raise XQIExecutionError("BX requires an operand (only LR is supported)")
         target = operands_node.children[0].value.strip()
         if target != 'LR':
-            raise ValueError(f"BX only supports LR, got {target}")
+            raise XQIExecutionError(f"BX only supports LR, got {target}")
         self.env.pc = int(self.env.lr)
 
     # 辅助方法 ---------------------------------------------------
@@ -1103,12 +1099,12 @@ class Evaluator:
     def _parse_memory_address(addr_str):
         """解析内存地址格式 M[数字] 或 M[基址+偏移]"""
         if not addr_str.startswith('M'):
-            raise ValueError(f"Invalid memory address format: {addr_str}")
+            raise XQIExecutionError(f"Invalid memory address format: {addr_str}")
         # 提取方括号内容
         left = addr_str.find('[')
         right = addr_str.find(']')
         if left == -1 or right == -1 or right <= left:
-            raise ValueError(f"Invalid memory address format: {addr_str}")
+            raise XQIExecutionError(f"Invalid memory address format: {addr_str}")
         # 解析基址和偏移量
         expr = addr_str[left + 1:right]
         if '+' in expr:
@@ -1132,7 +1128,7 @@ class Evaluator:
     def execute_rand(self, node):
         operands_node = next((c for c in node.children if c.type == 'Operands'), None)
         if not operands_node or len(operands_node.children) < 2:
-            raise ValueError("rand requires 2 operands (dest_reg, seed_reg)")
+            raise XQIExecutionError("rand requires 2 operands (dest_reg, seed_reg)")
         # 操作数在 Operands 子节点中;children[0] 是 Opcode 节点,不可按其取寄存器号
         dest = self._parse_register_index(operands_node.children[0].value, 'R')
         seed = self._parse_register_index(operands_node.children[1].value, 'R')

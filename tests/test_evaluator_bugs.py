@@ -141,3 +141,12 @@ def test_b7_bx_lr_returns_to_caller(tmp_path):
     result = run_xqiasm(BX_PROG, tmp_path)
     assert result.evaluator.env.registers[0] == 7
     assert result.evaluator.env.registers[1] == 1
+
+
+# ---------------------------------------------------------------- B10: debug-p
+@pytest.mark.bug
+def test_b10_debug_p_full_pipeline(tmp_path, monkeypatch):
+    """debug-p 全链路可执行(词法遮蔽修复后);input 暂停行为打桩屏蔽。"""
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    result = run_xqiasm(wrap("debug-p;"), tmp_path)
+    assert "!SUCCESS!" in result.stdout
