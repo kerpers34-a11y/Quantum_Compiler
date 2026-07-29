@@ -5,12 +5,31 @@
 由 evaluator.py 拆包而来(见 xqishell/evaluator/__init__.py)。
 """
 
+from functools import lru_cache
+
 import numpy as np
 
 from xqishell import config
 from xqishell.errors import XQIExecutionError
 
 from .noise import build_raw_kraus_ops
+
+
+def _lift_pure(single_op, target_qubit, n_qubits):
+    """lift_operator 的纯函数版(供模块级缓存使用)。"""
+    full_op = np.array([[1.0]], dtype=np.complex128)
+    for i in range(n_qubits - 1, -1, -1):
+        full_op = np.kron(full_op, single_op if i == target_qubit else np.eye(2))
+    return full_op
+
+
+@lru_cache(maxsize=1024)
+def _cached_kraus_ops(noise_type, qubit_idx, params_tuple, n_qubits):
+    """提升后的 Kraus 算符缓存:同 (模型,比特,参数,规模) 不重复 kron。"""
+    return tuple(
+        _lift_pure(m, qubit_idx, n_qubits) * coeff
+        for coeff, m in build_raw_kraus_ops(noise_type, list(params_tuple))
+    )
 
 
 class QuantumEnvironment:
@@ -129,9 +148,12 @@ class QuantumEnvironment:
             self.apply_kraus_channel(kraus_ops)
 
     def generate_kraus_operators(self, noise_type, qubit_idx, params):
-        """构造并提升 Kraus 算符到全系统空间(原始算符由 noise 模块纯函数构造)。"""
-        raw_ops = build_raw_kraus_ops(noise_type, params)
-        return [self.lift_operator(m, qubit_idx) * coeff for coeff, m in raw_ops]
+        """构造并提升 Kraus 算符到全系统空间(按 (模型,比特,参数,规模) 缓存)。
+
+        原始算符由 noise 模块纯函数构造;提升结果是只读共享对象
+        (apply_kraus_channel 不做原地修改),缓存安全。
+        """
+        return list(_cached_kraus_ops(noise_type, qubit_idx, tuple(params), self.qreg_size))
 
     def lift_operator(self, single_op, target_qubit):
         """把单比特算符提升到全系统空间(q[n-1] ⊗ ... ⊗ q[0],高位在左)。"""
