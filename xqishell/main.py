@@ -1,7 +1,5 @@
 import os
 import time
-import shutil
-import subprocess
 
 import pyperclip
 from prompt_toolkit import print_formatted_text, HTML
@@ -10,6 +8,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.cursor_shapes import CursorShape
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
 
+from xqishell.commands import ShellContext, dispatch
 from xqishell.xqi_lexer import XQILexer
 from xqishell.parser import Parser
 from xqishell.evaluator import QuantumEnvironment,Evaluator
@@ -121,40 +120,6 @@ def handle_multi_line_input(initial_text=""):
 ###################################################################################
 ###################################################################################
 
-def mini_vim(filename):
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ('.xqiasm', '.txt'):
-        print(f"不支持的文件类型: {ext}")
-        return
-
-    subprocess.run(["pyvim", filename])
-
-def view_text_file(filename):
-    """统一处理 .xqiasm 和 .txt 文件内容查看"""
-    try:
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in ('.xqiasm', '.txt'):
-            with open(filename, 'r', encoding='utf-8') as f:
-                content = f.read()
-            print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
-        else:
-            print_formatted_text(HTML(f'<cr>不支持的文件类型：</cr><cy2>{ext}</cy2>'), style=style_html)
-    except Exception as e:
-        print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
-
-###################################################################################
-###################################################################################
-
-def handle_file_execution(filename):
-    filepath = os.path.abspath(filename)  # 转成绝对路径
-    if os.path.exists(filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read(), filepath
-    else:
-        print_formatted_text(HTML(f'<cr>错误：文件</cr><cy2> {filepath} </cy2><cr>不存在</cr>'), style=style_html)
-        return None, None
-
-
 ###################################################################################
 ###################################################################################
 
@@ -189,7 +154,8 @@ main_progress = run_with_progress
 ###################################################################################
 ###################################################################################
 
-def main():
+def _print_banner():
+    """启动画面(保留原有的分步延迟打印)。"""
     print_formatted_text(HTML('<cg>###########################################</cg>'), style=style_html)
     print_formatted_text(HTML('<cbg>XQI: Quantum Computing Compiler and Simulator.</cbg>'), style=style_html)
     time.sleep(0.2)
@@ -205,6 +171,24 @@ def main():
     print_formatted_text(HTML('<cg>XQI Shell is running...(按 ctrl+c 退出)</cg>'), style=style_html)
     time.sleep(0.8)
 
+
+def _handle_program_block(ctx, raw_input):
+    """处理包含 XQI-BEGIN 的输入:完整块直接执行,否则进入交互式多行编辑。"""
+    if 'XQI-END' in raw_input.upper():
+        # 情况 A：已经是完整的块（包含 BEGIN 和 END）
+        print_formatted_text(HTML('<cg>检测到完整程序块，执行中...</cg>'), style=style_html)
+        ctx.run_program(raw_input)
+    else:
+        # 情况 B：只有 BEGIN，进入交互式多行模式;补齐换行,带入已输入内容
+        init_val = raw_input + ('\n' if not raw_input.endswith('\n') else '')
+        content = ctx.multi_line_input(initial_text=init_val)
+        if content:
+            ctx.run_program(content)
+
+
+def main():
+    _print_banner()
+
     session = PromptSession(
         message_prompt,
         key_bindings=bindings,
@@ -216,6 +200,7 @@ def main():
         cursor=CursorShape.BLINKING_BEAM,
         wrap_lines=True,
     )
+    ctx = ShellContext(run_program=run_with_progress, multi_line_input=handle_multi_line_input)
 
     while True:
         try:
@@ -225,124 +210,17 @@ def main():
             if raw_input is None: break
             if not raw_input.strip(): continue
 
-            # 2. 预处理：判定是否包含代码块标记
-            # 无论是首行还是中间包含，只要有 XQI-BEGIN 就启动代码块处理
-            full_input_upper = raw_input.upper()
-
-            if 'XQI-BEGIN' in full_input_upper:
-                # 情况 A：已经是完整的块（包含 BEGIN 和 END）
-                if 'XQI-END' in full_input_upper:
-                    print_formatted_text(HTML('<cg>检测到完整程序块，执行中...</cg>'), style=style_html)
-                    run_with_progress(raw_input)
-                else:
-                    # 情况 B：只有 BEGIN，进入交互式多行模式
-                    # 补齐换行，带入已输入内容
-                    init_val = raw_input + ('\n' if not raw_input.endswith('\n') else '')
-                    content = handle_multi_line_input(initial_text=init_val)
-                    if content:
-                        run_with_progress(content)
-
-                # 执行完程序块后，强制跳过本次循环剩余逻辑，回到 shell 顶层
+            # 2. 程序块模式:只要包含 XQI-BEGIN 就进入代码块处理
+            if 'XQI-BEGIN' in raw_input.upper():
+                _handle_program_block(ctx, raw_input)
                 print("")  # 打印空行，分隔输出与下一个 Prompt
                 continue
 
             # 3. 常规指令模式 (只有不含 XQI-BEGIN 时才进入逐行解析)
-            raw_lines = raw_input.split('\n')
-            for current_line in raw_lines:
+            for current_line in raw_input.split('\n'):
                 user_input = current_line.strip()
-                if not user_input: continue
-                # 指令分发逻辑
-                if user_input == 'ls':
-                    items = os.listdir(".")
-                    formatted = [f"<cbg>{i}/</cbg>" if os.path.isdir(i) else f"<cg>{i}</cg>"
-                                 for i in items if os.path.isdir(i) or i.lower().endswith((".xqiasm", ".txt"))]
-                    if formatted: print_formatted_text(HTML(" ".join(formatted)), style=style_html)
-
-                elif user_input == 'XQI-BEGIN':
-                    # 这种情况属于手动输入 XQI-BEGIN，直接进入多行模式
-                    content = handle_multi_line_input(initial_text="XQI-BEGIN\n")
-                    if content: run_with_progress(content)
-
-                elif user_input.startswith('./') and user_input.endswith('.XQIASM'):
-                    content, filepath = handle_file_execution(user_input[2:])
-                    if content: run_with_progress(content)
-
-                elif user_input.startswith('mkdir '):
-                    # 创建文件夹
-                    folder_name = user_input.split(' ', 1)[1]
-                    try:
-                        os.makedirs(folder_name, exist_ok=True)
-                        print_formatted_text(HTML(f'<cg>文件夹已创建：</cg><cy2>{folder_name}</cy2>'),
-                                             style=style_html)
-                    except Exception as e:
-                        print_formatted_text(HTML(f'<cr>创建失败：{str(e)}</cr>'), style=style_html)
-
-                elif user_input.startswith('rm '):
-                    # 删除文件或文件夹
-                    target = user_input.split(' ', 1)[1]
-                    try:
-                        if os.path.isdir(target):
-                            shutil.rmtree(target)
-                            print_formatted_text(HTML(f'<cg>文件夹已删除：</cg><cy2>{target}</cy2>'),
-                                                 style=style_html)
-                        elif os.path.isfile(target):
-                            os.remove(target)
-                            print_formatted_text(HTML(f'<cg>文件已删除：</cg><cy2>{target}</cy2>'), style=style_html)
-                        else:
-                            print_formatted_text(HTML(f'<cr>未找到目标：</cr><cy2>{target}</cy2>'), style=style_html)
-                    except Exception as e:
-                        print_formatted_text(HTML(f'<cr>删除失败：{str(e)}</cr>'), style=style_html)
-
-                elif user_input.startswith('cat '):
-                    # 查看文件内容
-                    filename = user_input.split(' ', 1)[1]
-                    try:
-                        with open(filename, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                        print_formatted_text(HTML(f'<ivory>{content}</ivory>'), style=style_html)
-                    except Exception as e:
-                        print_formatted_text(HTML(f'<cr>读取失败：{str(e)}</cr>'), style=style_html)
-
-                elif user_input.startswith('mv '):
-                    # 移动或重命名文件
-                    parts = user_input.split(' ')
-                    if len(parts) == 3:
-                        src, dst = parts[1], parts[2]
-                        try:
-                            shutil.move(src, dst)
-                            print_formatted_text(HTML(f'<cg>已移动/重命名：</cg><cy2>{src} → {dst}</cy2>'),
-                                                 style=style_html)
-                        except Exception as e:
-                            print_formatted_text(HTML(f'<cr>操作失败：{str(e)}</cr>'), style=style_html)
-                    else:
-                        print_formatted_text(HTML('<cr>用法错误：mv 源文件 目标文件</cr>'), style=style_html)
-
-                elif user_input.startswith('cp '):
-                    # 复制文件
-                    parts = user_input.split(' ')
-                    if len(parts) == 3:
-                        src, dst = parts[1], parts[2]
-                        try:
-                            if os.path.isdir(src):
-                                shutil.copytree(src, dst)
-                            else:
-                                shutil.copy2(src, dst)
-                            print_formatted_text(HTML(f'<cg>已复制：</cg><cy2>{src} → {dst}</cy2>'), style=style_html)
-                        except Exception as e:
-                            print_formatted_text(HTML(f'<cr>复制失败：{str(e)}</cr>'), style=style_html)
-                    else:
-                        print_formatted_text(HTML('<cr>用法错误：cp 源文件 目标文件</cr>'), style=style_html)
-
-                elif user_input.startswith('vim '):
-                    filename = user_input.split(' ', 1)[1]
-                    mini_vim(filename)
-
-                elif user_input.startswith('cd '):
-                    folder = user_input.split(' ', 1)[1]
-                    try:
-                        os.chdir(folder)
-                    except Exception as e:
-                        print_formatted_text(HTML(f'<cr>切换失败：{str(e)}</cr>'), style=style_html)
+                if user_input:
+                    dispatch(ctx, user_input)
 
         except KeyboardInterrupt:
             # 捕获主界面 Ctrl+C，不退出程序，只换行
