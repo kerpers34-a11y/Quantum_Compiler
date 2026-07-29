@@ -14,8 +14,8 @@ class InstructionError(ValueError):
     def __init__(self, instr_name, msg):
         super().__init__(f"[{instr_name}] {msg}")
 class QuantumEnvironment:
-    def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_Register,
-                 max_memory=config.MAX_Memory, simulation_mode='statevector'):
+    def __init__(self, qreg_size=0, creg_size=0, max_registers=config.MAX_REGISTER,
+                 max_memory=config.MAX_MEMORY, simulation_mode='statevector'):
         # 基础参数
         if not all(isinstance(x, int) and x >= 0 for x in [qreg_size, creg_size]):
             raise ValueError("Register sizes must be non-negative integers")
@@ -31,7 +31,6 @@ class QuantumEnvironment:
         self.initial_state_vector = None
         self.initial_density_matrix = None
         self._reset_quantum_register(qreg_size)
-        self.initial_quantum_state = None
         self.state_vector = np.array([], dtype=np.complex128)
         self.density_matrix = np.array([], dtype=np.complex128)
         self.quantum_state = self.density_matrix
@@ -47,8 +46,8 @@ class QuantumEnvironment:
         self.SF = 0 # 符号标志（负数）
         self.ZF = 0 # 零标志
         # 错误模型
-        self.error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
-        self._pending_error_model = (config.default_Q_error_Code, config.default_Q1_error_Probability, config.default_Q2_error_Probability, config.default_measure_error_Probability, config.default_reset_error_Probability)
+        self.error_model = (config.DEFAULT_Q_ERROR_CODE, config.DEFAULT_Q1_ERROR_PROBABILITY, config.DEFAULT_Q2_ERROR_PROBABILITY, config.DEFAULT_MEASURE_ERROR_PROBABILITY, config.DEFAULT_RESET_ERROR_PROBABILITY)
+        self._pending_error_model = (config.DEFAULT_Q_ERROR_CODE, config.DEFAULT_Q1_ERROR_PROBABILITY, config.DEFAULT_Q2_ERROR_PROBABILITY, config.DEFAULT_MEASURE_ERROR_PROBABILITY, config.DEFAULT_RESET_ERROR_PROBABILITY)
         self.initial_mode = simulation_mode.lower() # 记录初始设定的模式
         self.simulation_mode = self.initial_mode
 
@@ -74,17 +73,6 @@ class QuantumEnvironment:
     def resize_qreg(self, new_size):
         """指令调用 qreg q[n] 时触发"""
         self._reset_quantum_register(new_size)
-    def _initialize_quantum_state(self, size):
-        dim = 2 ** size if size > 0 else 1 # Treat size=0 as dim=1
-        if self.simulation_mode == 'statevector':
-            state = np.zeros(dim, dtype=np.complex128)
-            state[0] = 1.0 + 0j
-        elif self.simulation_mode == 'density_matrix':
-            state = np.zeros((dim, dim), dtype=np.complex128)
-            state[0, 0] = 1.0 + 0j
-        else:
-            raise ValueError(f"Unsupported simulation mode: {self.simulation_mode}")
-        return state
 
     def reset_for_shot(self):
         """每一轮 Shot 开始时调用"""
@@ -107,7 +95,10 @@ class QuantumEnvironment:
         self.registers.fill(0.0)
         self.memory.fill(0.0)
     def convert_to_density(self):
-        """此函数在双模式下变为无操作，因为 DM 一直存在"""
+        """把模拟模式切换为 density_matrix(应用噪声/局部误差前调用)。
+
+        密度矩阵在双模式下始终维护,这里只需翻转模式标志。
+        """
         self.simulation_mode = 'density_matrix'
 
     def apply_quantum_noise(self, qubits):
@@ -282,18 +273,6 @@ class QuantumEnvironment:
                         new_rho[row, col] = val * r_matrix[b1, b2]
         return new_rho
 
-    @staticmethod
-    def collect_labels(ast):  # Add self
-        labels = {}
-        pc = 0
-        for node in ast.children:
-            if node.type == 'Label':
-                labels[node.value] = pc
-            elif node.type == 'Instruction' and node.children[0].value not in {'shot', 'qreg', 'creg', 'error',
-                                                                               'XQI-BEGIN', 'XQI-END'}:
-                pc += 1  # Only count body instructions
-        return labels
-
 class Evaluator:
     np.random.seed()
     def __init__(self, env, parser, ast):
@@ -458,24 +437,6 @@ class Evaluator:
             for count in self.shots_count_dm:
                 f.write(struct.pack('<I', int(count)))
 
-    def _calculate_current_state_code(self):
-        """
-        将经典寄存器 creg 中的 0/1 序列转换为十进制整数索引
-        匹配 C 语言逻辑：Count_Shot_Quantum_State_Code 计算方式
-        """
-        code = 0
-        for i, val in enumerate(self.env.creg):
-            # 取实部并四舍五入（处理浮点误差），非零即为 1
-            bit = 1 if abs(val.real) > 0.5 else 0
-            code += (bit << i) # 位运算：bit * (2^i)
-        return code
-    def _calculate_dm_sample_code(self):
-        """
-        在密度矩阵模式下，测量结果已经由 execute_measure 存入 creg
-        这里直接复用计算逻辑（或根据需要定制）
-        """
-        return self._calculate_current_state_code()
-
     def execute_instruction(self, node):
         opcode = next(c.value for c in node.children if c.type == 'Opcode')
 
@@ -500,29 +461,6 @@ class Evaluator:
             if not has_local_err:
                 qubits = self._get_affected_qubits(node)
                 self.env.apply_quantum_noise(qubits)
-
-            # 4. 指令执行完毕，PC自增 (如果指令没自己改PC)
-            # 如果上面执行了 ERR，PC 已经加过
-            # 在量子操作后应用噪声
-            # if opcode in ['CNOT', 'U3']:
-            # qubits = self._get_affected_qubits(node)
-            # if qubits:
-            # print(f"Unified noise apply for {opcode}")
-            # self.env.apply_quantum_noise(qubits)
-            # opcode = opcode_node.value
-            # special_mov_dests = {'PC', 'LR', 'SF', 'ZF'}
-            # branch_ops = {'B', 'BL', 'BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'} # 移除 'MOV'
-            # if opcode in branch_ops:
-            # pass # No auto +1
-            # elif opcode == 'MOV':
-            # dest_operand = operands_node.children[0].value if operands_node else None
-            # if dest_operand in special_mov_dests:
-            # pass # No +1 for MOV to PC/LR/etc.
-            # else:
-            # self.env.pc += 1
-            # elif opcode in {'ADD', 'SUB', 'MUL', 'DIV', 'U3', 'CNOT', 'reset', 'measure', 'barrier', 'debug',
-            # 'debug-p'}:
-            # self.env.pc += 1
 
     def execute_err(self, node):
         """
@@ -588,62 +526,62 @@ class Evaluator:
             return
 
         # 3. 处理第二个参数：Error Code
-        code = config.default_Q_error_Code if len(operands) < 2 else int(operands[1].value)
+        code = config.DEFAULT_Q_ERROR_CODE if len(operands) < 2 else int(operands[1].value)
 
         # 4. 根据 Code 解析后续参数
         if code == 1:
             # --- 去极化误差逻辑 ---
             # 参数顺序: enable, code, p1, p2, p_measure, p_reset
-            p1 = float(operands[2].value) if len(operands) > 2 else config.default_Q1_error_Probability
-            p2 = float(operands[3].value) if len(operands) > 3 else config.default_Q2_error_Probability
-            p_measure = float(operands[4].value) if len(operands) > 4 else config.default_measure_error_Probability
-            p_reset = float(operands[5].value) if len(operands) > 5 else config.default_reset_error_Probability
+            p1 = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_Q1_ERROR_PROBABILITY
+            p2 = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_Q2_ERROR_PROBABILITY
+            p_measure = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
+            p_reset = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, p1, p2, p_measure, p_reset)
 
         elif code in [2, 3]:
             # --- 幅度(2)或相位(3)衰减误差逻辑 ---
             # 参数顺序: enable, code, gamma, p_measure, p_reset
             # 根据 code 选择 config 中的默认 gamma
-            default_gamma = config.default_amp_damping_gamma if code == 2 else config.default_phase_damping_gamma
+            default_gamma = config.DEFAULT_AMP_DAMPING_GAMMA if code == 2 else config.DEFAULT_PHASE_DAMPING_GAMMA
 
             # 第三个参数是 gamma
             gamma = float(operands[2].value) if len(operands) > 2 else default_gamma
             # 第四个参数是测量误差 (原本是第五个)
-            p_measure = float(operands[3].value) if len(operands) > 3 else config.default_measure_error_Probability
+            p_measure = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
             # 第五个参数是重置误差 (原本是第六个)
-            p_reset = float(operands[4].value) if len(operands) > 4 else config.default_reset_error_Probability
+            p_reset = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, gamma, gamma, p_measure, p_reset)
         elif code == 4:  # Thermal Relaxation
             # 指令格式: error TRUE, 4, T1, T2, Tgate, p_measure, p_reset
-            t1 = float(operands[2].value) if len(operands) > 2 else config.default_thermal_relaxation_error_T1
-            t2 = float(operands[3].value) if len(operands) > 3 else config.default_thermal_relaxation_error_T2
-            tg = float(operands[4].value) if len(operands) > 4 else config.default_thermal_relaxation_error_Tgate
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            t1 = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_THERMAL_RELAXATION_ERROR_T1
+            t2 = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_THERMAL_RELAXATION_ERROR_T2
+            tg = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_THERMAL_RELAXATION_ERROR_TGATE
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, [t1, t2, tg], [t1, t2, tg], p_measure, p_reset)
         elif code == 5:  # Pauli Error
             # 指令格式: error TRUE, 5, px, py, pz, p_measure, p_reset
-            px = float(operands[2].value) if len(operands) > 2 else config.default_pauli_X_error_Probability
-            py = float(operands[3].value) if len(operands) > 3 else config.default_pauli_Y_error_Probability
-            pz = float(operands[4].value) if len(operands) > 4 else config.default_pauli_Z_error_Probability
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            px = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_PAULI_X_ERROR_PROBABILITY
+            py = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_PAULI_Y_ERROR_PROBABILITY
+            pz = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_PAULI_Z_ERROR_PROBABILITY
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, [px, py, pz], [px, py, pz], p_measure, p_reset)
         elif code == 6:  # Coherent Error
             # 指令格式: error TRUE, 6, ex, ey, ez, p_measure, p_reset
-            ex = float(operands[2].value) if len(operands) > 2 else config.default_coherent_X_unitary_error_Probability
-            ey = float(operands[3].value) if len(operands) > 3 else config.default_coherent_Y_unitary_error_Probability
-            ez = float(operands[4].value) if len(operands) > 4 else config.default_coherent_Z_unitary_error_Probability
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.default_measure_error_Probability
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.default_reset_error_Probability
+            ex = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_COHERENT_X_UNITARY_ERROR_PROBABILITY
+            ey = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_COHERENT_Y_UNITARY_ERROR_PROBABILITY
+            ez = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_COHERENT_Z_UNITARY_ERROR_PROBABILITY
+            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
+            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, [ex, ey, ez], [ex, ey, ez], p_measure, p_reset)
 
         else:
             # 其他 Code 逻辑（暂按默认处理）
-            p1 = config.default_Q1_error_Probability
-            p2 = config.default_Q2_error_Probability
-            p_measure = config.default_measure_error_Probability
-            p_reset = config.default_reset_error_Probability
+            p1 = config.DEFAULT_Q1_ERROR_PROBABILITY
+            p2 = config.DEFAULT_Q2_ERROR_PROBABILITY
+            p_measure = config.DEFAULT_MEASURE_ERROR_PROBABILITY
+            p_reset = config.DEFAULT_RESET_ERROR_PROBABILITY
             self.env.error_model = (code, p1, p2, p_measure, p_reset)
 
         # 处理延迟应用逻辑
@@ -688,8 +626,8 @@ class Evaluator:
             dest_type = 'R'
             try:
                 dest_val = int(dest_str[2:-1])
-            except:
-                raise ValueError(f"Invalid R register format: {dest_str}")
+            except ValueError:
+                raise ValueError(f"Invalid R register format: {dest_str}") from None
             if dest_val < 0 or dest_val >= len(self.env.registers):
                 raise ValueError(f"R[{dest_val}] out of range")
         else:
@@ -702,8 +640,8 @@ class Evaluator:
             src_type = 'R'
             try:
                 src_val = int(src_str[2:-1])
-            except:
-                raise ValueError(f"Invalid source R register: {src_str}")
+            except ValueError:
+                raise ValueError(f"Invalid source R register: {src_str}") from None
             if src_val < 0 or src_val >= len(self.env.registers):
                 raise ValueError(f"Source R[{src_val}] out of range")
         elif src_str.isdigit() or (src_str.lstrip('-').isdigit()):
@@ -931,7 +869,7 @@ class Evaluator:
                 control = int(control_str[2:-1])
                 target = int(target_str[2:-1])
                 return [control, target]
-            except:
+            except (ValueError, IndexError):
                 return []
         elif opcode in ['U3', 'measure', 'reset']:
             # 最后一个操作数是量子位
@@ -941,7 +879,7 @@ class Evaluator:
             try:
                 qubit = int(qubit_str[2:-1])
                 return [qubit]
-            except:
+            except (ValueError, IndexError):
                 return []
         return []
 
@@ -1257,10 +1195,10 @@ class Evaluator:
         log_dir = os.path.dirname(self.parser.source_path) if self.parser.source_path else os.getcwd()
         # 统一定义文件路径
         self.paths = {
-            'sv_txt': os.path.join(log_dir, config.filename_debug),
-            'sv_dat': os.path.join(log_dir, config.filename_debug_matlab),
-            'dm_txt': os.path.join(log_dir, config.filename_debug_Density_Matrix),
-            'dm_dat': os.path.join(log_dir, config.filename_debug_Density_Matrix_matlab)
+            'sv_txt': os.path.join(log_dir, config.FILENAME_DEBUG),
+            'sv_dat': os.path.join(log_dir, config.FILENAME_DEBUG_MATLAB),
+            'dm_txt': os.path.join(log_dir, config.FILENAME_DEBUG_DENSITY_MATRIX),
+            'dm_dat': os.path.join(log_dir, config.FILENAME_DEBUG_DENSITY_MATRIX_MATLAB)
         }
         # --- 第一步：物理删除已存在的旧文件 ---
         for path in self.paths.values():
@@ -1300,14 +1238,6 @@ class Evaluator:
             for j in range(cols):
                 val = matrix[i, j]
                 f.write(f"[{i}][{j}]:({val.real:.6f})+({val.imag:.6f})i\n")
-        f.write("\n")
-    @staticmethod
-    def _write_vector_to_text(f, vector):
-        length = len(vector)
-        f.write(f"\nvector length:{length}:\n")
-        for i in range(length):
-            val = vector[i]
-            f.write(f"[{i}]:({val.real:.6f})+({val.imag:.6f})i\n")
         f.write("\n")
     def _write_common_debug(self, f):
         """写入寄存器、CPSR 和内存的通用部分"""

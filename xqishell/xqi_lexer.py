@@ -1,4 +1,7 @@
 import re
+from collections import deque
+
+from xqishell.tokens import Token
 
 token_map = [
     ('COMMENT', r'\;[^\n]*'),  # 注释：以 ';' 开始直到换行
@@ -136,7 +139,7 @@ class XQILexer:
         self.token_re = re.compile(token_regex)
         self.token_map = token_map
         self.code = code
-        self.tokens = []
+        self.tokens = deque()
 
         # 独立生成调试信息
         self.debug_generator = DebugInfoGenerator(code)
@@ -157,9 +160,6 @@ class XQILexer:
         line = 1
         col = 1
         for match in self.token_re.finditer(self.code):
-            if match is None:
-                raise ValueError(f"正则匹配失败 (行 {line}, 列 {col})")
-
             kind = match.lastgroup
             value = match.group()
             if kind in ('SKIP', 'NEWLINE'):
@@ -170,22 +170,19 @@ class XQILexer:
                     col += len(value)
                 continue  # 忽略空白字符
             elif kind == 'COMMENT':
-                # 保留分号
-                self.tokens.append(('ASSIGN', ';', line, col))
-                col += 1  # 分号的长度
-                col += len(value) - 1  # 注释的其余部分
-                continue  # 忽略注释的其余部分
+                # 注释以 ';' 开头:把分号保留为语句终止符,其余内容丢弃
+                self.tokens.append(Token('ASSIGN', ';', line, col))
+                col += len(value)
+                continue
             elif kind == 'MISMATCH':
                 raise ValueError(f"非法字符: {value} (行 {line}, 列 {col})")
-            self.tokens.append((kind, value, line, col))
+            self.tokens.append(Token(kind, value, line, col))
             col += len(value)
         # 确保 `;` 始终作为单独的 Token
-        if self.tokens and self.tokens[-1][0] != 'ASSIGN':
-            self.tokens.append(('ASSIGN', ';', line, col))
+        if self.tokens and self.tokens[-1].type != 'ASSIGN':
+            self.tokens.append(Token('ASSIGN', ';', line, col))
 
     def next_token(self):
         if self.tokens:
-            token = self.tokens.pop(0)
-            return token
-        else:
-            return 'EOF', 'EOF', 0, 0
+            return self.tokens.popleft()
+        return Token('EOF', 'EOF', 0, 0)

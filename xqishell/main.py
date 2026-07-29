@@ -3,6 +3,7 @@ import time
 import shutil
 import subprocess
 
+import pyperclip
 from prompt_toolkit import print_formatted_text, HTML
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -12,7 +13,7 @@ from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard
 from xqishell.xqi_lexer import XQILexer
 from xqishell.parser import Parser
 from xqishell.evaluator import QuantumEnvironment,Evaluator
-from xqishell import message_prompt, style_prompt, xqiasm_lexer, opcode_completer, style_html, CustomAutoSuggest, config, textprocessing_funs
+from xqishell import ASCII_ART_LOGO, message_prompt, style_prompt, xqiasm_lexer, opcode_completer, style_html, CustomAutoSuggest, config
 
 bindings = KeyBindings()
 
@@ -21,20 +22,17 @@ def _(event):
     event.app.exit()
 @bindings.add('c-v')
 def _(event):
-    """
-    强制从系统剪贴板读取内容并插入到当前光标位置
-    """
-    # 尝试获取剪贴板内容
+    """从系统剪贴板读取内容并插入到当前光标位置(跨平台,经 pyperclip)"""
     data = event.app.clipboard.get_data()
     if data.text:
         event.current_buffer.insert_text(data.text)
-    else:
-        import subprocess
-        try:
-            text = subprocess.check_output(['powershell', '-command', 'Get-Clipboard'], encoding='utf-8')
-            event.current_buffer.insert_text(text.strip())
-        except:
-            pass
+        return
+    try:
+        text = pyperclip.paste()
+    except Exception:
+        return
+    if text:
+        event.current_buffer.insert_text(text.strip())
 
 ###################################################################################
 ###################################################################################
@@ -42,11 +40,11 @@ def _(event):
 def write_debug_to_debug_file(_lexer):
 
     # 获取文件当前大小判断是否需要前置换行
-    file_size = os.path.getsize(config.filename_debug)
-    file_size_density_matrix = os.path.getsize(config.filename_debug_Density_Matrix)
+    file_size = os.path.getsize(config.FILENAME_DEBUG)
+    file_size_density_matrix = os.path.getsize(config.FILENAME_DEBUG_DENSITY_MATRIX)
     write_mode = 'a' if file_size > 0 else 'w'
 
-    with open(config.filename_debug, mode=write_mode, encoding='utf-8') as f:
+    with open(config.FILENAME_DEBUG, mode=write_mode, encoding='utf-8') as f:
         # 非空文件时添加换行分隔
         if file_size > 0:
             f.write('\n')  # 添加分隔换行符
@@ -58,7 +56,7 @@ def write_debug_to_debug_file(_lexer):
         if not _lexer.debug_message.endswith('\n'):
             f.write('\n')
 
-    with open(config.filename_debug_Density_Matrix, mode=write_mode, encoding='utf-8') as f:
+    with open(config.FILENAME_DEBUG_DENSITY_MATRIX, mode=write_mode, encoding='utf-8') as f:
         # 非空文件时添加换行分隔
         if file_size_density_matrix > 0:
             f.write('\n')  # 添加分隔换行符
@@ -176,26 +174,20 @@ def handle_file_execution(filename):
 ###################################################################################
 ###################################################################################
 
-def main_progress(user_input):
-    required_files = [config.filename_debug, config.filename_debug_Density_Matrix]
+def run_with_progress(user_input):
+    """执行一段完整 XQIASM 程序(词法→语法→求值),并打印操作行数与调试信息。"""
+    required_files = [config.FILENAME_DEBUG, config.FILENAME_DEBUG_DENSITY_MATRIX]
     for file in required_files:
         # 检查文件是否存在
         if not os.path.isfile(file):
             # 创建空文件
             with open(file, 'w') as f:
                 print(f"Create file: {os.path.abspath(file)}")
-        else:
-            pass
 
-    xqiasm_space_size = len(user_input)
-    operation_row_number = 0
-    for xqiasm_space_i_th in range(config.Length_string_XQI_BEGIN, xqiasm_space_size - config.Length_string_XQI_END):
-        # 打印当前字符
-        # print(xqiasm_space[xqiasm_space_i_th], end='')
-
-        # 统计分号数量
-        if user_input[xqiasm_space_i_th] == ';':
-            operation_row_number += 1
+    # 统计 XQI-BEGIN 与 XQI-END 之间的分号数(每条语句/注释一个,与原逐字符统计等价)
+    begin = config.LENGTH_STRING_XQI_BEGIN
+    end = len(user_input) - config.LENGTH_STRING_XQI_END
+    operation_row_number = user_input[begin:end].count(';')
 
     print_formatted_text(HTML(f'<cbg>operation row number=</cbg><cbb>{operation_row_number}</cbb>'), style=style_html)
     lexer_main = XQILexer(user_input)
@@ -205,6 +197,10 @@ def main_progress(user_input):
     env = QuantumEnvironment()
     evaluator = Evaluator(env,parser,ast)
     evaluator.evaluate(ast)
+
+
+# 兼容旧名(内部已统一使用 run_with_progress)
+main_progress = run_with_progress
 
 ###################################################################################
 ###################################################################################
@@ -217,15 +213,13 @@ def main():
     time.sleep(0.4)
     print_formatted_text(HTML('<cir>@Chengxian Deng. SCUT. 2020.</cir>'), style=style_html)
     time.sleep(0.5)
-    print_formatted_text(textprocessing_funs.fetch_ascii_by_id(1))
+    print_formatted_text(ASCII_ART_LOGO)
     print_formatted_text(HTML('<cg>###########################################</cg>'), style=style_html)
     time.sleep(0.5)
     print_formatted_text(HTML('<cbg>Quantum Computing Compiler and Simulator will Execute!</cbg>'), style=style_html)
     time.sleep(0.6)
     print_formatted_text(HTML('<cg>XQI Shell is running...(按 ctrl+c 退出)</cg>'), style=style_html)
     time.sleep(0.8)
-
-    system_clipboard = PyperclipClipboard()
 
     session = PromptSession(
         message_prompt,
@@ -255,14 +249,14 @@ def main():
                 # 情况 A：已经是完整的块（包含 BEGIN 和 END）
                 if 'XQI-END' in full_input_upper:
                     print_formatted_text(HTML('<cg>检测到完整程序块，执行中...</cg>'), style=style_html)
-                    main_progress(raw_input)
+                    run_with_progress(raw_input)
                 else:
                     # 情况 B：只有 BEGIN，进入交互式多行模式
                     # 补齐换行，带入已输入内容
                     init_val = raw_input + ('\n' if not raw_input.endswith('\n') else '')
                     content = handle_multi_line_input(initial_text=init_val)
                     if content:
-                        main_progress(content)
+                        run_with_progress(content)
 
                 # 执行完程序块后，强制跳过本次循环剩余逻辑，回到 shell 顶层
                 print("")  # 打印空行，分隔输出与下一个 Prompt
@@ -283,17 +277,11 @@ def main():
                 elif user_input == 'XQI-BEGIN':
                     # 这种情况属于手动输入 XQI-BEGIN，直接进入多行模式
                     content = handle_multi_line_input(initial_text="XQI-BEGIN\n")
-                    if content: main_progress(content)
+                    if content: run_with_progress(content)
 
                 elif user_input.startswith('./') and user_input.endswith('.XQIASM'):
                     content, filepath = handle_file_execution(user_input[2:])
-                    if content: main_progress(content)
-                elif '\n' in user_input:
-                    filename = f"XQI_PASTED_{time.strftime('%Y%m%d_%H%M%S')}.XQIASM"
-                    with open(filename, 'w', encoding='utf-8') as f:
-                        f.write(user_input)
-
-                    print_formatted_text(HTML(f'<cg>粘贴内容已保存：</cg><cy2>./{filename}</cy2>'), style=style_html)
+                    if content: run_with_progress(content)
 
                 elif user_input.startswith('mkdir '):
                     # 创建文件夹
@@ -369,7 +357,6 @@ def main():
                     folder = user_input.split(' ', 1)[1]
                     try:
                         os.chdir(folder)
-                        # print_formatted_text(HTML(f'<cg>已切换目录：</cg><cy2>{os.getcwd()}</cy2>'),style=style_html)
                     except Exception as e:
                         print_formatted_text(HTML(f'<cr>切换失败：{str(e)}</cr>'), style=style_html)
 

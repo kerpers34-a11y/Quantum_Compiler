@@ -87,17 +87,12 @@ class Parser:
         while self.current_token[0] != 'EOF' and self.current_token[0] != 'XQI_END':
             stmt = self.statement()
             if stmt:
-                # 更新最后有效指令状态
+                # 更新最后有效指令状态(供 ERR 必须紧跟 U3/CNOT 的校验使用)
                 if stmt.type == "Instruction":
                     op = stmt.children[0].value
                     if op in ('U3', 'CNOT'):
                         self.last_valid_opcode = op
                         self.last_opcode_line = stmt.line
-                else:
-                    if stmt.type == "Instruction":
-                        op = stmt.children[0].value
-                        if op not in ('U3', 'CNOT') and stmt.line > self.last_opcode_line:
-                            self.last_valid_opcode = None
                 program_node.children.append(stmt)
 
         # 确保 XQI-END 只出现在最后一行
@@ -216,9 +211,7 @@ class Parser:
             node.children = [opcode_node, operands_node]
         elif opcode_node.value == "error":
             operands_node = self.operand_list()
-            if not self.validate_error_operands(operands_node.children):
-                # validate 函数内部已经 raise，这里不会执行到
-                pass
+            self.validate_error_operands(operands_node.children)
             node.children = [opcode_node, operands_node]
         elif opcode_node.value == "U3":
             operands_node = self.operand_list()
@@ -376,19 +369,19 @@ class Parser:
         if token[0] == 'REGISTER':
             # 提取 R[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])  # 提取并转换为整数
-            if register_number < 0 or register_number >= config.MAX_Register:
+            if register_number < 0 or register_number >= config.MAX_REGISTER:
                 raise SyntaxError(f"语法错误: R[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"R[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_M':
             # 提取 M[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])
-            if register_number < 0 or register_number >= config.MAX_Memory:
+            if register_number < 0 or register_number >= config.MAX_MEMORY:
                 raise SyntaxError(f"语法错误: M[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"M[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_C':
             # 提取 c[n] 格式，并检查 n 是否在有效范围内
             register_number = int(token[1][2:-1])
-            if register_number < 0 or register_number >= config.MAX_Classical_Register:
+            if register_number < 0 or register_number >= config.MAX_CLASSICAL_REGISTER:
                 raise SyntaxError(f"语法错误: c[{register_number}] 超出范围 (行 {token[2]}, 列 {token[3]})")
             node = ASTNode("Operand", f"c[{register_number}]", line=token[2], col=token[3])
         elif token[0] == 'REGISTER_Q':
@@ -621,11 +614,11 @@ class Parser:
         """ 验证经典寄存器范围 """
         value = node.value
         if value.startswith('R['):
-            max_reg = config.MAX_Register
+            max_reg = config.MAX_REGISTER
         elif value.startswith('c['):
-            max_reg = config.MAX_Classical_Register
+            max_reg = config.MAX_CLASSICAL_REGISTER
         elif value.startswith('M['):
-            max_reg = config.MAX_Memory
+            max_reg = config.MAX_MEMORY
         else:
             return  # 非寄存器类型不处理
 
@@ -667,31 +660,3 @@ class Parser:
         elif opcode == "CSTR":
             if not first.value.startswith('c[') or not second.value.startswith('M['):
                 raise SyntaxError(f"CSTR格式应为c[X], M[Y] (行 {first.line})")
-
-"""
-    def loop(self):
-        ### 解析循环结构
-        start_label = None
-        end_label = None
-        # 寻找循环的开始标签
-        if self.current_token[0] == 'LABEL_DEF':
-            start_label = self.current_token[1][:-1]  # 移除 `:` 符号
-            self.eat('LABEL_DEF')
-            if self.current_token[0] == 'ASSIGN':
-                self.eat('ASSIGN')  # 消耗 `;`，但不添加到 AST
-        # 解析循环体
-        loop_body = ASTNode("LoopBody", line=self.current_token[2], col=self.current_token[3])
-        while self.current_token[0] != 'EOF' and self.current_token[0] != 'LABEL_DEF':
-            loop_body.children.append(self.statement())
-            if self.current_token[0] == 'ASSIGN':
-                self.eat('ASSIGN')  # 消耗 `;`，但不添加到 AST
-        # 寻找循环的结束条件
-        if self.current_token[0] in ('BEQ', 'BNE', 'BGT', 'BGE', 'BLT', 'BLE'):
-            condition = self.conditional_branch()
-            if condition.children[1].value == start_label:
-                end_label = self.current_token[1]
-                self.eat('LABEL_DEF')
-            else:
-                raise SyntaxError(f"循环结束条件不匹配: 期望 {start_label}, 但得到 {condition.children[1].value} (行 {self.current_token[2]}, 列 {self.current_token[3]})")
-        return ASTNode("Loop", None, [start_label, loop_body, end_label], line=self.current_token[2], col=self.current_token[3])
-"""

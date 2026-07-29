@@ -1,5 +1,4 @@
 from pygments.lexer import RegexLexer
-from prompt_toolkit.lexers import PygmentsLexer
 from pygments.token import Text, Comment, Keyword, Name, String, Number, Punctuation
 
 class XQIASMLexer(RegexLexer):
@@ -21,8 +20,5 @@ class XQIASMLexer(RegexLexer):
             (r'.', Text)
         ],
     }
-    def lex_document(self, document):
-        lexer = PygmentsLexer(XQIASMLexer)  # 使用Prompt Toolkit的适配器
-        return lexer.lex_document(document)
 
 __all__ = ['XQIASMLexer']
