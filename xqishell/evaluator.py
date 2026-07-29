@@ -288,8 +288,18 @@ class Evaluator:
         # 每个 shot 捕获第一次测量前的状态(用于最终展示)
         self.pre_measure_state_sv = None
 
-    def evaluate(self, ast):
-        # --- 1. 预解析 (Shot, Labels, Instructions) ---
+    def evaluate(self, ast, verbose=True):
+        """执行完整程序:预解析 → 逐 shot 执行 → 最终输出。
+
+        verbose: 是否打印 PC 轨迹等过程输出(默认 True,与历史行为一致)。
+        """
+        self._prepare(ast)
+        for shot_nth in range(1, self.shot_total + 1):
+            self._run_single_shot(shot_nth, verbose)
+        self._report_final()
+
+    def _prepare(self, ast):
+        """预解析 (Shot, Labels, Instructions) 并初始化输出文件。"""
         self.body_instructions = []
         self.labels = {}
 
@@ -318,42 +328,45 @@ class Evaluator:
         self._prepare_final_state_files()  # 初始化结果文件 (.dat)
         self._initialize_debug_files()
 
-        # --- 2. 核心执行循环 (Shot 循环) ---
-        for shot_nth in range(1, self.shot_total + 1):
-            if shot_nth == 1:
-                print(f"Total Program Row:{len(self.body_instructions):-10d}\n")
+    def _run_single_shot(self, shot_nth, verbose=True):
+        """执行单个 shot,结束后统计并追加二进制状态。"""
+        if shot_nth == 1 and verbose:
+            print(f"Total Program Row:{len(self.body_instructions):-10d}\n")
 
-            self.shot_idx = shot_nth
-            self.env.reset_for_shot()  # 内含 measured_bits 重置
-            self.pre_measure_state_sv = None  # 每个 shot 重置，捕获第一次测量前的状态
+        self.shot_idx = shot_nth
+        self.env.reset_for_shot()  # 内含 measured_bits 重置
+        self.pre_measure_state_sv = None  # 每个 shot 重置，捕获第一次测量前的状态
 
-            while self.env.pc < len(self.body_instructions) and not self.env.shot_completed:
-                # 打印 PC 轨迹，严格匹配 C 输出：PC=%-10d (shot: %d)
+        while self.env.pc < len(self.body_instructions) and not self.env.shot_completed:
+            # 打印 PC 轨迹，严格匹配 C 输出：PC=%-10d (shot: %d)
+            if verbose:
                 print(f"PC={self.env.pc:<10d} (shot: {shot_nth})")
 
-                instr_node = self.body_instructions[self.env.pc]
-                opcode = next(c.value for c in instr_node.children if c.type == 'Opcode')
+            instr_node = self.body_instructions[self.env.pc]
+            opcode = next(c.value for c in instr_node.children if c.type == 'Opcode')
 
-                # 捕获测量前状态（用于最后展示 Complete Measure Info）
-                if opcode == 'measure' and self.pre_measure_state_sv is None:
-                    self.pre_measure_state_sv = self.env.state_vector.copy()
+            # 捕获测量前状态（用于最后展示 Complete Measure Info）
+            if opcode == 'measure' and self.pre_measure_state_sv is None:
+                self.pre_measure_state_sv = self.env.state_vector.copy()
 
-                # 执行指令
-                old_pc = self.env.pc
-                self.execute_instruction(instr_node)
+            # 执行指令
+            old_pc = self.env.pc
+            self.execute_instruction(instr_node)
 
-                # PC 控制逻辑：如果指令没有进行跳转（如 B/BL），则 PC + 1
-                if self.env.pc == old_pc:
-                    self.env.pc += 1
+            # PC 控制逻辑：如果指令没有进行跳转（如 B/BL），则 PC + 1
+            if self.env.pc == old_pc:
+                self.env.pc += 1
 
-            # Shot 结束后统计(未发生测量时,理想计数回落到物理 creg)
-            creg_sv = self.env.creg_ideal if self.env.creg_ideal is not None else self.env.creg
-            self.shots_count_sv[self._calculate_state_code(creg_sv)] += 1
-            self.shots_count_dm[self._calculate_state_code(self.env.creg)] += 1
-            self._append_shot_states_to_binary()
+        # Shot 结束后统计(未发生测量时,理想计数回落到物理 creg)
+        creg_sv = self.env.creg_ideal if self.env.creg_ideal is not None else self.env.creg
+        self.shots_count_sv[self._calculate_state_code(creg_sv)] += 1
+        self.shots_count_dm[self._calculate_state_code(self.env.creg)] += 1
+        self._append_shot_states_to_binary()
+        if verbose:
             print("")
 
-            # --- 3. 最终控制台输出 (匹配 C 语言顺序) ---
+    def _report_final(self):
+        """最终控制台输出(匹配 C 语言顺序)并收尾二进制文件。"""
         # 打印指令清单
         print("\nOperate Instructions:\n")
         print("XQI-BEGIN")
@@ -493,6 +506,71 @@ class Evaluator:
     def execute_shot(self, node):
         pass
 
+    # ---------------------------------------------------------------- error 指令
+    @staticmethod
+    def _error_param(operands, idx, default):
+        """取第 idx 个物理参数(缺省用默认值)。"""
+        return float(operands[idx].value) if len(operands) > idx else default
+
+    def _error_model_code1(self, ops):
+        """去极化: enable, 1, p1, p2, p_measure, p_reset"""
+        P = self._error_param
+        return (1,
+                P(ops, 2, config.DEFAULT_Q1_ERROR_PROBABILITY),
+                P(ops, 3, config.DEFAULT_Q2_ERROR_PROBABILITY),
+                P(ops, 4, config.DEFAULT_MEASURE_ERROR_PROBABILITY),
+                P(ops, 5, config.DEFAULT_RESET_ERROR_PROBABILITY))
+
+    def _error_model_code23(self, ops, code):
+        """幅度(2)/相位(3)衰减: enable, code, gamma, p_measure, p_reset"""
+        P = self._error_param
+        default_gamma = (
+            config.DEFAULT_AMP_DAMPING_GAMMA if code == 2
+            else config.DEFAULT_PHASE_DAMPING_GAMMA
+        )
+        gamma = P(ops, 2, default_gamma)
+        return (code, gamma, gamma,
+                P(ops, 3, config.DEFAULT_MEASURE_ERROR_PROBABILITY),
+                P(ops, 4, config.DEFAULT_RESET_ERROR_PROBABILITY))
+
+    def _error_model_code4(self, ops):
+        """热弛豫: enable, 4, T1, T2, Tgate, p_measure, p_reset"""
+        P = self._error_param
+        t = [P(ops, 2, config.DEFAULT_THERMAL_RELAXATION_ERROR_T1),
+             P(ops, 3, config.DEFAULT_THERMAL_RELAXATION_ERROR_T2),
+             P(ops, 4, config.DEFAULT_THERMAL_RELAXATION_ERROR_TGATE)]
+        return (4, list(t), list(t),
+                P(ops, 5, config.DEFAULT_MEASURE_ERROR_PROBABILITY),
+                P(ops, 6, config.DEFAULT_RESET_ERROR_PROBABILITY))
+
+    def _error_model_code5(self, ops):
+        """Pauli: enable, 5, px, py, pz, p_measure, p_reset"""
+        P = self._error_param
+        p = [P(ops, 2, config.DEFAULT_PAULI_X_ERROR_PROBABILITY),
+             P(ops, 3, config.DEFAULT_PAULI_Y_ERROR_PROBABILITY),
+             P(ops, 4, config.DEFAULT_PAULI_Z_ERROR_PROBABILITY)]
+        return (5, list(p), list(p),
+                P(ops, 5, config.DEFAULT_MEASURE_ERROR_PROBABILITY),
+                P(ops, 6, config.DEFAULT_RESET_ERROR_PROBABILITY))
+
+    def _error_model_code6(self, ops):
+        """相干幺正: enable, 6, ex, ey, ez, p_measure, p_reset"""
+        P = self._error_param
+        e = [P(ops, 2, config.DEFAULT_COHERENT_X_UNITARY_ERROR_PROBABILITY),
+             P(ops, 3, config.DEFAULT_COHERENT_Y_UNITARY_ERROR_PROBABILITY),
+             P(ops, 4, config.DEFAULT_COHERENT_Z_UNITARY_ERROR_PROBABILITY)]
+        return (6, list(e), list(e),
+                P(ops, 5, config.DEFAULT_MEASURE_ERROR_PROBABILITY),
+                P(ops, 6, config.DEFAULT_RESET_ERROR_PROBABILITY))
+
+    @staticmethod
+    def _error_model_default(code):
+        """未识别 code 的默认模型(沿用历史行为)。"""
+        return (code, config.DEFAULT_Q1_ERROR_PROBABILITY,
+                config.DEFAULT_Q2_ERROR_PROBABILITY,
+                config.DEFAULT_MEASURE_ERROR_PROBABILITY,
+                config.DEFAULT_RESET_ERROR_PROBABILITY)
+
     def execute_error(self, instruction_node):
         # 1. 提取 Operands 子节点
         operands_node = next((c for c in instruction_node.children if c.type == 'Operands'), None)
@@ -517,81 +595,40 @@ class Evaluator:
                 del self.env._pending_error_model
             return
 
-        # 3. 处理第二个参数：Error Code
+        # 3. 处理第二个参数：Error Code,并按 code 分派构建误差模型
         code = config.DEFAULT_Q_ERROR_CODE if len(operands) < 2 else int(operands[1].value)
 
-        # 4. 根据 Code 解析后续参数
-        if code == 1:
-            # --- 去极化误差逻辑 ---
-            # 参数顺序: enable, code, p1, p2, p_measure, p_reset
-            p1 = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_Q1_ERROR_PROBABILITY
-            p2 = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_Q2_ERROR_PROBABILITY
-            p_measure = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            p_reset = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, p1, p2, p_measure, p_reset)
-
-        elif code in [2, 3]:
-            # --- 幅度(2)或相位(3)衰减误差逻辑 ---
-            # 参数顺序: enable, code, gamma, p_measure, p_reset
-            # 根据 code 选择 config 中的默认 gamma
-            default_gamma = config.DEFAULT_AMP_DAMPING_GAMMA if code == 2 else config.DEFAULT_PHASE_DAMPING_GAMMA
-
-            # 第三个参数是 gamma
-            gamma = float(operands[2].value) if len(operands) > 2 else default_gamma
-            # 第四个参数是测量误差 (原本是第五个)
-            p_measure = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            # 第五个参数是重置误差 (原本是第六个)
-            p_reset = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, gamma, gamma, p_measure, p_reset)
-        elif code == 4:  # Thermal Relaxation
-            # 指令格式: error TRUE, 4, T1, T2, Tgate, p_measure, p_reset
-            t1 = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_THERMAL_RELAXATION_ERROR_T1
-            t2 = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_THERMAL_RELAXATION_ERROR_T2
-            tg = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_THERMAL_RELAXATION_ERROR_TGATE
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, [t1, t2, tg], [t1, t2, tg], p_measure, p_reset)
-        elif code == 5:  # Pauli Error
-            # 指令格式: error TRUE, 5, px, py, pz, p_measure, p_reset
-            px = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_PAULI_X_ERROR_PROBABILITY
-            py = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_PAULI_Y_ERROR_PROBABILITY
-            pz = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_PAULI_Z_ERROR_PROBABILITY
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, [px, py, pz], [px, py, pz], p_measure, p_reset)
-        elif code == 6:  # Coherent Error
-            # 指令格式: error TRUE, 6, ex, ey, ez, p_measure, p_reset
-            ex = float(operands[2].value) if len(operands) > 2 else config.DEFAULT_COHERENT_X_UNITARY_ERROR_PROBABILITY
-            ey = float(operands[3].value) if len(operands) > 3 else config.DEFAULT_COHERENT_Y_UNITARY_ERROR_PROBABILITY
-            ez = float(operands[4].value) if len(operands) > 4 else config.DEFAULT_COHERENT_Z_UNITARY_ERROR_PROBABILITY
-            p_measure = float(operands[5].value) if len(operands) > 5 else config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            p_reset = float(operands[6].value) if len(operands) > 6 else config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, [ex, ey, ez], [ex, ey, ez], p_measure, p_reset)
-
+        builders = {
+            1: self._error_model_code1,
+            4: self._error_model_code4,
+            5: self._error_model_code5,
+            6: self._error_model_code6,
+        }
+        if code in (2, 3):
+            self.env.error_model = self._error_model_code23(operands, code)
+        elif code in builders:
+            self.env.error_model = builders[code](operands)
         else:
-            # 其他 Code 逻辑（暂按默认处理）
-            p1 = config.DEFAULT_Q1_ERROR_PROBABILITY
-            p2 = config.DEFAULT_Q2_ERROR_PROBABILITY
-            p_measure = config.DEFAULT_MEASURE_ERROR_PROBABILITY
-            p_reset = config.DEFAULT_RESET_ERROR_PROBABILITY
-            self.env.error_model = (code, p1, p2, p_measure, p_reset)
+            self.env.error_model = self._error_model_default(code)
 
         # 处理延迟应用逻辑
         if hasattr(self.env, '_pending_error_model'):
             self.env._pending_error_model = self.env.error_model
-        # print(f"Error model updated: code={code}, p1={p1}, p2={p2}, p_m={p_measure}, p_r={p_reset}")
-    def execute_qreg(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        operand_str = operands_node.children[0].value
+
+    @staticmethod
+    def _reg_size_from(node):
+        """从 qreg/creg 指令节点解析寄存器大小(q[n]/c[n] 中的 n)。"""
+        operand_str = next((c for c in node.children if c.type == 'Operands'), None).children[0].value
         left, right = operand_str.find('['), operand_str.find(']')
-        qreg_size = int(operand_str[left + 1:right])
+        return int(operand_str[left + 1:right])
+
+    def execute_qreg(self, node):
+        qreg_size = self._reg_size_from(node)
         self.env.resize_qreg(qreg_size)
         print(f"Quantum Register Number: {qreg_size}")
+
     def execute_creg(self, node):
-        operands_node = next((c for c in node.children if c.type == 'Operands'), None)
-        operand_str = operands_node.children[0].value
-        left, right = operand_str.find('['), operand_str.find(']')
-        creg_size = int(operand_str[left + 1:right])
+        creg_size = self._reg_size_from(node)
         self.env._initial_creg = np.zeros(creg_size, dtype=np.complex128)
         self.env.creg = self.env._initial_creg.copy()
         # 匹配 C 语言 613 行
